@@ -13,6 +13,7 @@ from prompt_toolkit.layout.containers import ConditionalContainer
 from prompt_toolkit.layout.controls import BufferControl, UIContent, FormattedTextControl
 from prompt_toolkit.layout.margins import Margin
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.widgets import FormattedTextToolbar
 from prompt_toolkit.lexers import PygmentsLexer
 
 from pygments.lexers import get_lexer_for_filename
@@ -24,7 +25,7 @@ from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 
 class IndentGuideProcessor(Processor):
-    """Substitui a indentação por guias visuais verticais sutis."""
+    """Substitui os espaços de indentação no início das linhas por guias visuais."""
 
     def apply_transformation(self, transformation_input):
         line = transformation_input.fragments
@@ -36,7 +37,7 @@ class IndentGuideProcessor(Processor):
                 new_text = []
                 for char in text:
                     if char == " " and in_indentation:
-                        new_text.append("┊")
+                        new_text.append("·")
                     else:
                         in_indentation = False
                         new_text.append(char)
@@ -53,7 +54,7 @@ class IndentGuideProcessor(Processor):
 
 
 class CustomNumberedMargin(Margin):
-    """Margem personalizada com números de linha e separador."""
+    """Margem personalizada com números de linha e um caractere separador."""
 
     def __init__(self, separator: str = "│") -> None:
         self.separator = separator
@@ -73,7 +74,7 @@ class CustomNumberedMargin(Margin):
         result: StyleAndTextTuples = []
         last_lineno = None
 
-        digits_width = max(1, width - len(self.separator) - 2)
+        digits_width = width - len(self.separator) - 2
 
         for y, lineno in enumerate(window_render_info.displayed_lines):
             if lineno != last_lineno:
@@ -114,15 +115,13 @@ def main():
     texto_salvo = [texto]
     estado_salvamento = ["SALVO"]
 
+    # Estado do menu lateral (Outline)
     outline_visivel = [False]
-    outline_itens = []
-    outline_index = [0]
-
-    # Condições isoladas para evitar duplicação de teclas
-    is_outline_open = Condition(lambda: outline_visivel[0])
-    is_outline_closed = Condition(lambda: not outline_visivel[0])
+    outline_itens = []      # Lista de tuplas (número_linha, texto_item)
+    outline_index = [0]     # Índice do item selecionado no menu
 
     def atualizar_outline():
+        """Analisa o arquivo Python e monta o Outline usando AST."""
         outline_itens.clear()
 
         if caminho.suffix != ".py":
@@ -134,11 +133,12 @@ def main():
             for no in ast.walk(arvore):
                 if isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     outline_itens.append(
-                        (no.lineno - 1, f"λ  {no.name}")
+                        (no.lineno - 1, f"def {no.name}")
                     )
+
                 elif isinstance(no, ast.ClassDef):
                     outline_itens.append(
-                        (no.lineno - 1, f"◈  {no.name}")
+                        (no.lineno - 1, f"class {no.name}")
                     )
 
             outline_itens.sort(key=lambda item: item[0])
@@ -148,68 +148,42 @@ def main():
                     outline_index[0],
                     len(outline_itens) - 1
                 )
-            else:
-                outline_index[0] = 0
 
-        except Exception:
-            # Captura com segurança qualquer erro de parsing sem quebrar a UI
-            outline_itens.clear()
+        except SyntaxError:
+            # Se o código estiver temporariamente inválido,
+            # o Outline simplesmente fica vazio.
+            return
 
     def obter_texto_outline():
+        """Gera o texto formatado para a barra lateral do Outline."""
         if not outline_itens:
-            return [("class:outline.empty", "\n  (Nenhum bloco)")]
+            return [("class:outline.empty", " Nenhum bloco encontrado\n")]
         
-        resultado = [
-            ("class:outline.header", "\n  OUTLINE\n"),
-            ("class:outline.border", " ───────────────\n")
-        ]
+        resultado = [("class:outline.header", " ── SUMÁRIO ──\n\n")]
         for idx, (lineno, nome) in enumerate(outline_itens):
             if idx == outline_index[0]:
-                resultado.append(("class:outline.selected", f" ▶ {nome}\n"))
+                resultado.append(("class:outline.selected", f"> {nome}\n"))
             else:
-                resultado.append(("class:outline.item", f"   {nome}\n"))
+                resultado.append(("class:outline.item", f"  {nome}\n"))
         return resultado
 
     teclas = KeyBindings()
 
     @teclas.add("tab")
     def indentacao(event):
-        buf = event.current_buffer
+        event.current_buffer.insert_text("    ")
 
-        if not buf.selection_state:
-            buf.insert_text("    ")
-            return
-
-        inicio, fim = buf.document.selection_range()
-        texto = buf.text
-
-        # Começo da primeira linha selecionada
-        inicio_linha = texto.rfind("\n", 0, inicio) + 1
-
-        # Descobre a última linha selecionada
-        fim_linha = texto.find("\n", fim)
-
-        if fim_linha == -1:
-            fim_linha = len(texto)
-
-        bloco = texto[inicio_linha:fim_linha]
-
-        # Adiciona 4 espaços em cada linha
-        bloco_indentado = "\n".join(
-            "    " + linha
-            for linha in bloco.split("\n")
-        )
-
-        buf.cursor_position = inicio_linha
-        buf.delete(count=fim_linha - inicio_linha)
-        buf.insert_text(bloco_indentado)
-
-        # Mantém a seleção cobrindo o bloco inteiro
-        novo_fim = inicio_linha + len(bloco_indentado)
-        buf.cursor_position = inicio_linha
-        buf.start_selection()
-        buf.cursor_position = novo_fim
-
+    @teclas.add("c-s")
+    def salvar(event):
+        try:
+            caminho.write_text(buffer.text, encoding="utf-8")
+            texto_salvo[0] = buffer.text
+            estado_salvamento[0] = "SALVO"
+        except PermissionError:
+            estado_salvamento[0] = "ERRO: sem permissão para salvar"
+        except OSError as e:
+            estado_salvamento[0] = f"ERRO AO SALVAR: {e}"
+    
     @teclas.add("c-a")
     def selecionar_tudo(event):
         buf = event.current_buffer
@@ -220,42 +194,20 @@ def main():
     @teclas.add("c-k")
     def deletar_linha(event):
         buf = event.current_buffer
-
-        if buf.selection_state:
-            inicio, fim = buf.document.selection_range()
-            buf.cursor_position = inicio
-            buf.delete(count=fim - inicio)
-            return
-
-        inicio = buf.document.get_start_of_line_position()
-        fim = buf.document.get_end_of_line_position()
-
-        buf.cursor_position += inicio
-        quantidade = fim - inicio
-
-        if quantidade > 0:
-            buf.delete(count=quantidade)
-
-        if buf.cursor_position < len(buf.text):
-            buf.delete(count=1)
+        buf.cursor_position += buf.document.get_start_of_line_position()
+        buf.delete(count=len(buf.document.current_line))
 
     @teclas.add("c-c")
     def copiar(event):
         buf = event.current_buffer
         if buf.selection_state:
-            try:
-                pyperclip.copy(buf.copy_selection().text)
-            except Exception:
-                pass
+            pyperclip.copy(buf.copy_selection().text)
 
     @teclas.add("c-v")
     def colar(event):
-        try:
-            texto_colar = pyperclip.paste()
-            if texto_colar:
-                event.current_buffer.insert_text(texto_colar)
-        except Exception:
-            pass
+        texto_colar = pyperclip.paste()
+        if texto_colar:
+            event.current_buffer.insert_text(texto_colar)
 
     @teclas.add("c-z")
     def desfazer(event):
@@ -270,31 +222,32 @@ def main():
     def sair(event):
         event.app.exit()
 
+    # Atalho para abrir/fechar o Painel Sumário (Outline)
     @teclas.add("c-o")
     def toggle_outline(event):
         outline_visivel[0] = not outline_visivel[0]
         if outline_visivel[0]:
             atualizar_outline()
 
-    # Teclas de navegação do Outline com filtro exclusivo
-    @teclas.add("up", filter=is_outline_open)
+    # Navegação dentro do menu Outline com as Setas para Cima/Baixo e Enter
+    @teclas.add("up", filter=Condition(lambda: outline_visivel[0]))
     def outline_cima(event):
         if outline_itens:
             outline_index[0] = max(0, outline_index[0] - 1)
 
-    @teclas.add("down", filter=is_outline_open)
+    @teclas.add("down", filter=Condition(lambda: outline_visivel[0]))
     def outline_baixo(event):
         if outline_itens:
             outline_index[0] = min(len(outline_itens) - 1, outline_index[0] + 1)
 
-    @teclas.add("enter", filter=is_outline_open)
+    @teclas.add("enter", filter=Condition(lambda: outline_visivel[0]))
     def outline_confirmar(event):
-        if outline_itens and 0 <= outline_index[0] < len(outline_itens):
+        if outline_itens:
             linha_alvo, _ = outline_itens[outline_index[0]]
             buffer.cursor_position = buffer.document.translate_row_col_to_index(linha_alvo, 0)
         outline_visivel[0] = False
 
-    @teclas.add("escape", filter=is_outline_open)
+    @teclas.add("escape", filter=Condition(lambda: outline_visivel[0]))
     def outline_fechar(event):
         outline_visivel[0] = False
 
@@ -313,37 +266,24 @@ def main():
     editor = Window(
         content=controle,
         wrap_lines=False,
-        cursorline=True,
         left_margins=[CustomNumberedMargin(separator="│")]
     )
 
+    # Painel do Sumário
     janela_outline = Window(
         content=FormattedTextControl(text=obter_texto_outline),
-        width=30,
+        width=35,
         style="class:outline"
     )
 
+    # Função para checar a sintaxe em tempo real
     def validar_sintaxe():
         modificado = buffer.text != texto_salvo[0]
 
         if modificado:
-            estado_texto = "MODIFICADO"
-            estado_estilo = "class:status.modified"
+            estado = "MODIFICADO"
         else:
-            estado_texto = estado_salvamento[0]
-            if estado_texto.startswith("ERRO"):
-                estado_estilo = "class:status.error"
-            else:
-                estado_estilo = "class:status.saved"
-
-        linha_cursor = buffer.document.cursor_position_row + 1
-        coluna_cursor = buffer.document.cursor_position_col + 1
-        tamanho_bytes = len(buffer.text.encode("utf-8"))
-
-        if tamanho_bytes < 1024:
-            tamanho = f"{tamanho_bytes} B"
-        else:
-            tamanho = f"{tamanho_bytes / 1024:.1f} KB"
+            estado = estado_salvamento[0]
 
         if caminho.suffix == ".py":
             try:
@@ -352,22 +292,20 @@ def main():
                 linha = e.lineno if e.lineno is not None else "?"
                 coluna = e.offset if e.offset is not None else "?"
                 return [
-                    ("class:status.text", f"  {caminho.name}  "),
-                    ("class:status.separator", "│"),
-                    (estado_estilo, f"  {estado_texto}  "),
-                    ("class:status.separator", "│"),
-                    ("class:status.error", f"  Erro Ln {linha}, Col {coluna}: {e.msg}")
+                    (
+                        "class:status.error",
+                        f"  {caminho.name}  |  {estado}  |  Erro na linha {linha}, coluna {coluna}: {e.msg}"
+                    )
                 ]
-            except Exception:
-                pass
 
         return [
-            (estado_estilo, f"  {estado_texto}  "),
-            ("class:status.separator", "│"),
-            ("class:status.text", f"  Ln {linha_cursor}, Col {coluna_cursor}  "),
-            ("class:status.separator", "│"),
-            ("class:status.hint", f"  {tamanho}  ")
+            (
+                "class:status",
+                f"  {estado}  |  Ctrl+S: salvar  |  Ctrl+O: sumário"
+            )
         ]
+
+    # Substitua a variável status antiga por esta:
 
     status = Window(
         content=FormattedTextControl(text=validar_sintaxe),
@@ -378,79 +316,55 @@ def main():
     cabecalho = Window(
         content=FormattedTextControl(
             text=lambda: [
-                ("class:header.icon", " 🐍 "),
-                ("class:header.title", " JCODE "),
-                ("class:header.sep", " › "),
-                ("class:header.filename", f"{caminho.name}"),
+                ("class:header", f" JCODE  │  {caminho.name}")
             ]
         ),
-        height=1,
-        style="class:header"
+        height=1, style="class:header"
     )
 
+    # Exibe o separador e a barra lateral do sumário apenas quando ativados com Ctrl+O
     corpo = VSplit([
         editor,
         ConditionalContainer(
             Window(width=1, char="│", style="class:line-number.separator"),
-            filter=is_outline_open
+            filter=Condition(lambda: outline_visivel[0])
         ),
         ConditionalContainer(
             janela_outline,
-            filter=is_outline_open
+            filter=Condition(lambda: outline_visivel[0])
         )
     ])
 
     layout = HSplit(
-        [cabecalho, corpo, status],
+        [corpo, status],
         style="class:background"
     )
 
     estilo = Style.from_dict({
         "": "#ebdbb2 bg:#282828",
         "background": "bg:#282828",
-        
-        # Cabeçalho
-        "header": "bg:#3c3836",
-        "header.icon": "#fe8019 bold bg:#3c3836",
-        "header.title": "#fbf1c7 bold bg:#3c3836",
-        "header.sep": "#928374 bg:#3c3836",
-        "header.filename": "#8ec07c bg:#3c3836",
-
-        # Barra de Status
+        "header": "#ebdbb2 bold bg:#3c3836",
         "status": "#ebdbb2 bg:#3c3836",
-        "status.text": "#ebdbb2 bg:#3c3836",
-        "status.saved": "#b8bb26 bold bg:#3c3836",
-        "status.modified": "#fabd2f bold bg:#3c3836",
         "status.error": "#fb4934 bold bg:#3c3836",
-        "status.hint": "#a89984 bg:#3c3836",
-        "status.separator": "#665c54 bg:#3c3836",
-
-        # Editor
-        "cursor-line": "bg:#32302f",
         "line-number": "#7c6f64",
         "line-number.current": "#fe8019 bold",
-        "line-number.separator": "#3c3836",
-        "indent-guide": "#3c3836",
-
-        # Pygments (Sintaxe)
-        "pygments.keyword": "#fb4934 bold",
+        "line-number.separator": "#504945",
+        "indent-guide": "#504945",
+        "pygments.keyword": "#fb4934",
         "pygments.string": "#b8bb26",
-        "pygments.comment": "#928374 italic",
+        "pygments.comment": "#928374",
         "pygments.number": "#d3869b",
-        "pygments.name": "#ebdbb2",
-        "pygments.name.function": "#8ec07c bold",
-        "pygments.name.class": "#fabd2f bold",
-        "pygments.name.namespace": "#8ec07c",
+        "pygments.name": "#a89984",
+        "pygments.name.function": "#84B8B5",
+        "pygments.name.namespace": "#84B8B5",
         "pygments.operator": "#fe8019",
-        "pygments.decorator": "#d3869b",
-
-        # Outline / Sidebar
+        "pygments.decorator": "#d8a657",
+        "pygments.name.decorator": "#d8a657",
         "outline": "bg:#1d2021",
         "outline.header": "#fe8019 bold",
-        "outline.border": "#3c3836",
         "outline.selected": "#fabd2f bold bg:#3c3836",
         "outline.item": "#ebdbb2",
-        "outline.empty": "#928374 italic",
+        "outline.empty": "#928374",
     })
 
     app = Application(
@@ -460,7 +374,7 @@ def main():
         style=estilo,
         mouse_support=True,
     )
-
+    
     def texto_alterado(_):
         if outline_visivel[0]:
             atualizar_outline()
@@ -479,3 +393,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
