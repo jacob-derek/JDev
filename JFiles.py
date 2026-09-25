@@ -10,7 +10,6 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 from prompt_toolkit.filters import Condition
 
-
 # ============================================================
 # ESTADO
 # ============================================================
