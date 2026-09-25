@@ -8,6 +8,7 @@ from prompt_toolkit.filters import Condition
 
 from prompt_toolkit import Application
 from prompt_toolkit.buffer import Buffer
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.layout import Layout, Window, HSplit, VSplit, WindowRenderInfo
 from prompt_toolkit.layout.containers import ConditionalContainer
 from prompt_toolkit.layout.controls import BufferControl, UIContent, FormattedTextControl
@@ -22,6 +23,114 @@ from pygments.util import ClassNotFound
 from prompt_toolkit.styles import Style
 from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.formatted_text import StyleAndTextTuples
+
+
+class PythonCompleter(Completer):
+    """Autocomplete simples para Python baseado no AST do arquivo."""
+
+    def __init__(self, buffer: Buffer):
+        self.buffer = buffer
+
+    def _coletar_nomes(self, arvore):
+        nomes = set()
+
+        # Palavras-chave e builtins mais comuns.
+        nomes.update({
+            "and", "as", "assert", "async", "await", "break", "case",
+            "class", "continue", "def", "del", "elif", "else", "except",
+            "False", "finally", "for", "from", "global", "if", "import",
+            "in", "is", "lambda", "match", "None", "nonlocal", "not",
+            "or", "pass", "raise", "return", "True", "try", "while",
+            "with", "yield",
+        })
+
+        nomes.update({
+            "abs", "all", "any", "bool", "dict", "dir", "enumerate",
+            "filter", "float", "input", "int", "isinstance", "len",
+            "list", "map", "max", "min", "open", "print", "range",
+            "repr", "reversed", "round", "set", "sorted", "str", "sum",
+            "super", "tuple", "type", "zip",
+        })
+
+        for no in ast.walk(arvore):
+            if isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                nomes.add(no.name)
+
+                if isinstance(no, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for argumento in no.args.posonlyargs + no.args.args + no.args.kwonlyargs:
+                        nomes.add(argumento.arg)
+                    if no.args.vararg:
+                        nomes.add(no.args.vararg.arg)
+                    if no.args.kwarg:
+                        nomes.add(no.args.kwarg.arg)
+
+            elif isinstance(no, ast.Import):
+                for alias in no.names:
+                    nomes.add(alias.asname or alias.name.split(".")[0])
+
+            elif isinstance(no, ast.ImportFrom):
+                for alias in no.names:
+                    if alias.name != "*":
+                        nomes.add(alias.asname or alias.name)
+
+            elif isinstance(no, (ast.Assign, ast.AnnAssign, ast.NamedExpr)):
+                alvos = no.targets if isinstance(no, ast.Assign) else [no.target]
+                for alvo in alvos:
+                    for nome in self._nomes_do_alvo(alvo):
+                        nomes.add(nome)
+
+            elif isinstance(no, (ast.For, ast.AsyncFor)):
+                for nome in self._nomes_do_alvo(no.target):
+                    nomes.add(nome)
+
+            elif isinstance(no, (ast.With, ast.AsyncWith)):
+                for item in no.items:
+                    if item.optional_vars:
+                        nomes.update(self._nomes_do_alvo(item.optional_vars))
+
+            elif isinstance(no, ast.ExceptHandler) and no.name:
+                nomes.add(no.name)
+
+        return nomes
+
+    def _nomes_do_alvo(self, alvo):
+        if isinstance(alvo, ast.Name):
+            return {alvo.id}
+
+        if isinstance(alvo, (ast.Tuple, ast.List)):
+            nomes = set()
+            for elemento in alvo.elts:
+                nomes.update(self._nomes_do_alvo(elemento))
+            return nomes
+
+        return set()
+
+    def get_completions(self, document, complete_event):
+        prefixo = document.get_word_before_cursor(WORD=True)
+
+        if not prefixo:
+            return
+
+        try:
+            arvore = ast.parse(self.buffer.text)
+            nomes = self._coletar_nomes(arvore)
+        except SyntaxError:
+            # Enquanto o usuário está digitando, o arquivo pode estar inválido.
+            # Ainda oferecemos keywords/builtins básicos.
+            nomes = {
+                "def", "class", "if", "elif", "else", "for", "while",
+                "try", "except", "finally", "with", "import", "from",
+                "return", "True", "False", "None", "print", "len",
+                "range", "str", "int", "list", "dict", "set", "open",
+            }
+
+        for nome in sorted(nomes):
+            if nome.startswith(prefixo) and nome != prefixo:
+                yield Completion(
+                    nome,
+                    start_position=-len(prefixo),
+                    display=nome,
+                )
 
 
 class IndentGuideProcessor(Processor):
@@ -112,6 +221,13 @@ def main():
     buffer = Buffer()
     buffer.text = texto
 
+    # Autocomplete Python baseado no AST.
+    if caminho.suffix == ".py":
+        buffer.completer = PythonCompleter(buffer)
+
+    # Buffer temporário usado pelo comando Ctrl+G
+    buffer_goto = Buffer()
+
     texto_salvo = [texto]
     estado_salvamento = ["SALVO"]
 
@@ -167,11 +283,44 @@ def main():
                 resultado.append(("class:outline.item", f"  {nome}\n"))
         return resultado
 
+    # Estado do prompt "Ir para linha"
+    goto_visivel = [False]
+
+    def executar_goto():
+        try:
+            linha = int(buffer_goto.text.strip())
+        except ValueError:
+            return
+
+        if linha < 1 or linha > len(buffer.document.lines):
+            return
+
+        buffer.cursor_position = buffer.document.translate_row_col_to_index(
+            linha - 1,
+            0
+        )
+        goto_visivel[0] = False
+        buffer_goto.reset()
+        app.layout.focus(buffer)
+        app.invalidate()
+
     teclas = KeyBindings()
 
     @teclas.add("tab")
-    def indentacao(event):
-        event.current_buffer.insert_text("    ")
+    def tab(event):
+        buffer_atual = event.current_buffer
+
+        # Se o autocomplete estiver aberto, Tab aceita a próxima sugestão.
+        if buffer_atual.complete_state:
+            buffer_atual.complete_next()
+        else:
+            # Caso contrário, Tab continua funcionando como indentação.
+            buffer_atual.insert_text("    ")
+
+    @teclas.add("c-space")
+    def autocomplete(event):
+        # Abre o autocomplete manualmente.
+        event.current_buffer.start_completion(select_first=False)
 
     @teclas.add("c-s")
     def salvar(event):
@@ -197,11 +346,14 @@ def main():
         buf.cursor_position += buf.document.get_start_of_line_position()
         buf.delete(count=len(buf.document.current_line))
 
-    @teclas.add("c-c")
+    @teclas.add("c-c", eager=True)
     def copiar(event):
         buf = event.current_buffer
+
         if buf.selection_state:
-            pyperclip.copy(buf.copy_selection().text)
+            texto = buf.copy_selection().text
+            pyperclip.copy(texto)
+            buf.exit_selection()
 
     @teclas.add("c-v")
     def colar(event):
@@ -228,6 +380,25 @@ def main():
         outline_visivel[0] = not outline_visivel[0]
         if outline_visivel[0]:
             atualizar_outline()
+
+    # Ir diretamente para uma linha com Ctrl+G
+    @teclas.add("c-g")
+    def abrir_goto(event):
+        goto_visivel[0] = True
+        buffer_goto.reset()
+        app.layout.focus(buffer_goto)
+        app.invalidate()
+
+    @teclas.add("enter", filter=Condition(lambda: goto_visivel[0]))
+    def goto_confirmar(event):
+        executar_goto()
+
+    @teclas.add("escape", filter=Condition(lambda: goto_visivel[0]))
+    def goto_cancelar(event):
+        goto_visivel[0] = False
+        buffer_goto.reset()
+        app.layout.focus(buffer)
+        app.invalidate()
 
     # Navegação dentro do menu Outline com as Setas para Cima/Baixo e Enter
     @teclas.add("up", filter=Condition(lambda: outline_visivel[0]))
@@ -285,26 +456,33 @@ def main():
         else:
             estado = estado_salvamento[0]
 
+        linha_atual = buffer.document.cursor_position_row + 1
+        coluna_atual = buffer.document.cursor_position_col + 1
+
+        posicao = f"Ln {linha_atual}, Col {coluna_atual}"
+
         if caminho.suffix == ".py":
             try:
                 ast.parse(buffer.text)
             except SyntaxError as e:
                 linha = e.lineno if e.lineno is not None else "?"
                 coluna = e.offset if e.offset is not None else "?"
+
                 return [
                     (
                         "class:status.error",
-                        f"  {caminho.name}  |  {estado}  |  Erro na linha {linha}, coluna {coluna}: {e.msg}"
+                        f"  {caminho.name}  |  {estado}  |  {posicao}  |  "
+                        f"Erro na linha {linha}, coluna {coluna}: {e.msg}"
                     )
                 ]
 
         return [
             (
                 "class:status",
-                f"  {estado}  |  Ctrl+S: salvar  |  Ctrl+O: sumário"
+                f"  {caminho.name}  |  {estado}  |  {posicao}  |  "
+                f"Ctrl+S: salvar  |  Ctrl+O: sumário"
             )
         ]
-
     # Substitua a variável status antiga por esta:
 
     status = Window(
@@ -335,8 +513,17 @@ def main():
         )
     ])
 
+    janela_goto = ConditionalContainer(
+        Window(
+            content=BufferControl(buffer=buffer_goto),
+            height=1,
+            style="class:goto"
+        ),
+        filter=Condition(lambda: goto_visivel[0])
+    )
+
     layout = HSplit(
-        [corpo, status],
+        [corpo, janela_goto, status],
         style="class:background"
     )
 
@@ -346,6 +533,7 @@ def main():
         "header": "#ebdbb2 bold bg:#3c3836",
         "status": "#ebdbb2 bg:#3c3836",
         "status.error": "#fb4934 bold bg:#3c3836",
+        "goto": "#ebdbb2 bg:#3c3836",
         "line-number": "#7c6f64",
         "line-number.current": "#fe8019 bold",
         "line-number.separator": "#504945",
@@ -382,6 +570,11 @@ def main():
 
     buffer.on_text_changed += texto_alterado
 
+    def cursor_movido(_):
+        app.invalidate()
+
+    buffer.on_cursor_position_changed += cursor_movido
+
     try:
         sys.stdout.write("\033[2 q")
         sys.stdout.flush()
@@ -393,5 +586,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
