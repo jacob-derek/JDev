@@ -1,6 +1,8 @@
 import sys
 import ast
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Callable, List, Tuple, Set
 
@@ -24,6 +26,62 @@ from pygments.util import ClassNotFound
 from prompt_toolkit.styles import Style
 from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.formatted_text import StyleAndTextTuples
+
+from prompt_toolkit.keys import Keys
+
+def calcular_indentacao_enter(linha: str, coluna: int) -> str:
+    """Retorna a indentação anterior ao cursor, limitada à indentação da linha."""
+    indent = len(linha) - len(linha.lstrip(" "))
+    prefixo = linha[:max(0, min(coluna, len(linha)))]
+    antes = min(len(prefixo) - len(prefixo.lstrip(" ")), indent)
+    base = " " * antes
+    if coluna >= len(linha) and linha.rstrip().endswith(":"):
+        base += "    "
+    return base
+
+
+def interpretar_ir_linha(comando: str, linha_atual: int, total_linhas: int):
+    """Retorna (linha, coluna_1based_ou_None), ou levanta ValueError."""
+    comando = comando.strip()
+    if not comando:
+        raise ValueError("Digite uma linha.")
+    if ":" in comando:
+        partes = comando.split(":")
+        if len(partes) != 2 or not all(x.isdigit() for x in partes):
+            raise ValueError("Use linha:coluna, por exemplo 42:8.")
+        linha, coluna = map(int, partes)
+        if not 1 <= linha <= total_linhas or coluna < 1:
+            raise ValueError("Linha ou coluna fora do intervalo.")
+        return linha - 1, coluna - 1
+    if comando[0] in "+-":
+        if not comando[1:].isdigit():
+            raise ValueError("Deslocamento inválido.")
+        linha = linha_atual + int(comando)
+    elif comando.isdigit():
+        linha = int(comando)
+    else:
+        raise ValueError("Digite um número, +N, -N ou linha:coluna.")
+    if not 1 <= linha <= total_linhas:
+        raise ValueError(f"A linha deve estar entre 1 e {total_linhas}.")
+    return linha - 1, None
+
+
+def indentar_bloco(linhas, inicio, fim, remover=False):
+    """Transforma linhas inclusivamente entre inicio e fim (índices zero-based)."""
+    resultado = list(linhas)
+    if not resultado:
+        return resultado
+    inicio = max(0, min(inicio, len(resultado) - 1))
+    fim = max(0, min(fim, len(resultado) - 1))
+    a, b = sorted((inicio, fim))
+    for i in range(a, b + 1):
+        if remover:
+            n = len(resultado[i]) - len(resultado[i].lstrip(" "))
+            resultado[i] = resultado[i][min(4, n):]
+        else:
+            resultado[i] = "    " + resultado[i]
+    return resultado
+
 
 PALAVRAS_CHAVE_PYTHON = [
     "def", "class", "import", "from", "return", "if", "elif", "else",
@@ -171,16 +229,23 @@ def main():
     # Cache de análise: um único ast.parse() por mudança de texto, compartilhado entre
     # o completer, o outline e a validação de sintaxe da status bar (antes eram 3 parses
     # independentes a cada tecla digitada).
-    analise = {
-        "arvore": None,
-        "erro_sintaxe": None,
-        "identificadores": set(PALAVRAS_CHAVE_PYTHON),
+    LINGUAGENS = {
+        ".py": set(PALAVRAS_CHAVE_PYTHON),
+        ".c": set("auto break case char const continue default do double else enum extern float for goto if int long register return short signed sizeof static struct switch typedef union unsigned void volatile while printf scanf NULL size_t".split()),
+        ".h": set("char const define elif else endif error if ifdef ifndef include line pragma undef auto break case enum extern float for goto int long register return short signed sizeof static struct typedef union unsigned void volatile while NULL size_t".split()),
     }
+    extensao = caminho.suffix.lower()
+    palavras_linguagem = LINGUAGENS.get(extensao, set(PALAVRAS_CHAVE_PYTHON))
+    analise = {"arvore": None, "erro_sintaxe": None, "identificadores": set(palavras_linguagem)}
 
     def atualizar_analise():
         texto_atual = buffer.text
         try:
-            analise["arvore"] = ast.parse(texto_atual)
+            if extensao != ".py":
+                analise["arvore"] = None
+                analise["erro_sintaxe"] = None
+            else:
+                analise["arvore"] = ast.parse(texto_atual)
             analise["erro_sintaxe"] = None
         except SyntaxError as e:
             analise["arvore"] = None
@@ -189,7 +254,10 @@ def main():
             analise["arvore"] = None
             analise["erro_sintaxe"] = None
 
-        analise["identificadores"] = extrair_identificadores(texto_atual, analise["arvore"])
+        if extensao == ".py":
+            analise["identificadores"] = extrair_identificadores(texto_atual, analise["arvore"])
+        else:
+            analise["identificadores"] = set(palavras_linguagem) | set(re.findall(r"\b[a-zA-Z_]\w*\b", texto_atual))
 
     # Configuração do Autocomplete Dinâmico
     buffer = Buffer(complete_while_typing=True, auto_suggest=AutoSuggestFromHistory())
@@ -203,6 +271,14 @@ def main():
     texto_salvo = [texto]
     estado_salvamento = ["ERRO: falha ao ler o arquivo — salvar está bloqueado" if erro_leitura else "SALVO"]
     leitura_falhou = [erro_leitura]
+
+    # Estados dos modos adicionais
+    selecao_linha = {"ativa": False, "inicio": 0, "fim": 0}
+    modo_explorar = {"ativo": False, "posicao": 0}
+    modo_comando = {"ativo": False, "texto": "", "erro": ""}
+    clipboard_interno = [""]
+    mensagem_status = [""]
+    alteracao_bloco = [False]
 
     # Estado do menu lateral (Outline)
     outline_visivel = [False]
@@ -251,30 +327,87 @@ def main():
         return resultado
 
     teclas = KeyBindings()
+    cond_outline_foco = Condition(lambda: outline_visivel[0] and outline_foco[0])
+    cond_comando = Condition(lambda: modo_comando["ativo"])
+    cond_editor = Condition(lambda: not modo_comando["ativo"] and not cond_outline_foco())
+    cond_atalho_global = Condition(lambda: not modo_comando["ativo"])
+    cond_selecao = Condition(lambda: cond_editor() and selecao_linha["ativa"] and not modo_explorar["ativo"])
+    cond_explorar = Condition(lambda: cond_editor() and modo_explorar["ativo"] and not selecao_linha["ativa"])
+    cond_normal = Condition(lambda: cond_editor() and not selecao_linha["ativa"] and not modo_explorar["ativo"])
 
-    @teclas.add("tab")
+    def atualizar_selecao(buf):
+        total = len(buf.document.lines) - 1
+        r1 = max(0, min(selecao_linha["inicio"], total))
+        r2 = max(0, min(selecao_linha["fim"], total))
+        baixo, cima = sorted((r1, r2))
+        a = buf.document.translate_row_col_to_index(baixo, 0)
+        b = buf.document.translate_row_col_to_index(cima, len(buf.document.lines[cima]))
+        buf.cursor_position = a
+        buf.start_selection()
+        buf.cursor_position = b
+
+    def aceitar_selecao(buf):
+        if selecao_linha["ativa"]:
+            atualizar_selecao(buf)
+
+    @teclas.add("tab", filter=Condition(lambda: cond_editor() and selecao_linha["ativa"]))
+    def tab_bloco(event):
+        buf = event.current_buffer
+        linhas = indentar_bloco(buf.text.split("\n"), selecao_linha["inicio"], selecao_linha["fim"])
+        alteracao_bloco[0] = True
+        try:
+            buf.text = "\n".join(linhas)
+        finally:
+            alteracao_bloco[0] = False
+        aceitar_selecao(buf)
+
+    @teclas.add("c-d", filter=Condition(lambda: cond_editor() and selecao_linha["ativa"]))
+    @teclas.add("s-tab", filter=Condition(lambda: cond_editor() and selecao_linha["ativa"]))
+    def dedent_bloco(event):
+        buf = event.current_buffer
+        linhas = indentar_bloco(buf.text.split("\n"), selecao_linha["inicio"], selecao_linha["fim"], True)
+        alteracao_bloco[0] = True
+        try:
+            buf.text = "\n".join(linhas)
+        finally:
+            alteracao_bloco[0] = False
+        aceitar_selecao(buf)
+
+    @teclas.add("tab", filter=cond_normal)
     def tab(event):
         buf = event.current_buffer
+        if buf.complete_state and buf.complete_state.current_completion:
+            buf.apply_completion(buf.complete_state.current_completion)
+        else:
+            buf.insert_text("    ")
 
-        if buf.complete_state:
-            completion = buf.complete_state.current_completion
-
-            if completion:
-                buf.apply_completion(completion)
-                return
-
-        buf.insert_text("    ")
-
-    @teclas.add("right")
-    def aceitar_sugestao_seta(event):
-        """Aceita a sugestão ao pressionar a seta para a direita se o cursor estiver no fim da linha."""
+    @teclas.add("enter", filter=cond_normal)
+    def enter_editor(event):
         buf = event.current_buffer
-        if buf.document.is_cursor_at_the_end_of_line and buf.suggestion:
+        doc = buf.document
+        indent = calcular_indentacao_enter(doc.current_line, doc.cursor_position_col) if extensao == ".py" else " " * min(len(doc.current_line) - len(doc.current_line.lstrip(" ")), doc.cursor_position_col)
+        buf.insert_text("\n" + indent)
+
+    @teclas.add("right", filter=Condition(lambda: cond_normal() or cond_explorar()))
+    def aceitar_sugestao_seta(event):
+        buf = event.current_buffer
+        if cond_normal() and doc_sugestao(buf):
             buf.insert_text(buf.suggestion.text)
         else:
-            buf.cursor_position += 1
+            buf.cursor_position = min(buf.cursor_position + 1, len(buf.text))
 
-    @teclas.add("c-s")
+    def doc_sugestao(buf):
+        return buf.document.is_cursor_at_the_end_of_line and bool(buf.suggestion)
+
+    @teclas.add("left", filter=Condition(lambda: cond_normal() or cond_explorar()))
+    def esquerda(event):
+        buf = event.current_buffer
+        if buf.document.cursor_position_col == 0 and buf.document.cursor_position_row > 0:
+            buf.cursor_position = buf.document.translate_row_col_to_index(buf.document.cursor_position_row - 1, len(buf.document.lines[buf.document.cursor_position_row - 1]))
+        else:
+            buf.cursor_position = max(0, buf.cursor_position - 1)
+
+    @teclas.add("c-s", filter=cond_atalho_global)
     def salvar(event):
         if leitura_falhou[0]:
             estado_salvamento[0] = "ERRO: leitura original falhou — salvamento bloqueado por segurança"
@@ -287,15 +420,15 @@ def main():
             estado_salvamento[0] = "ERRO: sem permissão para salvar"
         except OSError as e:
             estado_salvamento[0] = f"ERRO AO SALVAR: {e}"
-    
-    @teclas.add("c-a")
+
+    @teclas.add("c-a", filter=cond_editor)
     def selecionar_tudo(event):
         buf = event.current_buffer
         buf.cursor_position = 0
         buf.start_selection()
         buf.cursor_position = len(buf.text)
 
-    @teclas.add("c-k")
+    @teclas.add("c-k", filter=cond_editor)
     def deletar_linha(event):
         buf = event.current_buffer
         doc = buf.document
@@ -303,77 +436,158 @@ def main():
         line_start = doc.get_start_of_line_position()
         line_end = doc.get_end_of_line_position()
         fim_absoluto = pos_original + line_end
-
         buf.cursor_position += line_start
-        length = (line_end - line_start) + (1 if fim_absoluto < len(buf.text) else 0)
-        buf.delete(count=length)
+        buf.delete(count=(line_end - line_start) + (1 if fim_absoluto < len(buf.text) else 0))
 
-    @teclas.add("c-c")
+    def clipboard_escrever(texto):
+        erros = []
+        try:
+            pyperclip.copy(texto); return "pyperclip"
+        except Exception as e: erros.append(type(e).__name__)
+        exe = shutil.which("termux-clipboard-set")
+        if exe:
+            try:
+                subprocess.run([exe], input=texto, text=True, timeout=2, check=True); return "Termux"
+            except Exception as e: erros.append(type(e).__name__)
+        clipboard_interno[0] = texto
+        return "memória" + (" (externo indisponível)" if erros else "")
+
+    def clipboard_ler():
+        erros = []
+        try:
+            valor = pyperclip.paste()
+            if valor: return valor, "pyperclip"
+        except Exception as e: erros.append(type(e).__name__)
+        exe = shutil.which("termux-clipboard-get")
+        if exe:
+            try:
+                r = subprocess.run([exe], capture_output=True, text=True, timeout=2, check=True)
+                if r.stdout: return r.stdout, "Termux"
+            except Exception as e: erros.append(type(e).__name__)
+        return clipboard_interno[0], "memória" if clipboard_interno[0] else "vazio/indisponível"
+
+    @teclas.add("c-c", filter=cond_editor, eager=True)
     def copiar(event):
         buf = event.current_buffer
         if buf.selection_state:
-            try:
-                pyperclip.copy(buf.copy_selection().text)
-            except Exception:
-                pass
+            mensagem_status[0] = "Clipboard: " + clipboard_escrever(buf.copy_selection().text)
+            buf.exit_selection()
+            selecao_linha["ativa"] = False
 
-    @teclas.add("c-v")
+    @teclas.add("c-v", filter=cond_editor)
     def colar(event):
-        try:
-            texto_colar = pyperclip.paste()
-            if texto_colar:
-                event.current_buffer.insert_text(texto_colar)
-        except Exception:
-            pass
+        texto_colar, backend = clipboard_ler()
+        if texto_colar:
+            if selecao_linha["ativa"]:
+                selecao_linha["ativa"] = False
+                event.current_buffer.exit_selection()
+            event.current_buffer.insert_text(texto_colar, fire_event=True)
+            mensagem_status[0] = "Colado: " + backend
+        else:
+            mensagem_status[0] = "Clipboard vazio ou indisponível"
 
-    @teclas.add("c-z")
-    def desfazer(event):
-        event.current_buffer.undo()
+    @teclas.add("c-z", filter=cond_atalho_global)
+    def desfazer(event): event.current_buffer.undo()
+    @teclas.add("c-y", filter=cond_atalho_global)
+    @teclas.add("c-r", filter=cond_atalho_global)
+    def refazer(event): event.current_buffer.redo()
+    @teclas.add("c-q", filter=cond_atalho_global)
+    def sair(event): event.app.exit()
 
-    @teclas.add("c-y")
-    @teclas.add("c-r")
-    def refazer(event):
-        event.current_buffer.redo()
-
-    @teclas.add("c-q")
-    def sair(event):
-        event.app.exit()
-
-    # Atalho para abrir/fechar o Painel Sumário (Outline)
-    @teclas.add("c-o")
+    @teclas.add("c-o", filter=Condition(lambda: not modo_comando["ativo"]))
     def toggle_outline(event):
         outline_visivel[0] = not outline_visivel[0]
         outline_foco[0] = outline_visivel[0]
         if outline_visivel[0]:
+            selecao_linha["ativa"] = False; modo_explorar["ativo"] = False
             atualizar_outline()
-
-    # Condição restrita ao foco do Sumário
-    cond_outline_foco = Condition(lambda: outline_visivel[0] and outline_foco[0])
 
     @teclas.add("up", filter=cond_outline_foco)
     def outline_cima(event):
-        if outline_itens:
-            outline_index[0] = max(0, outline_index[0] - 1)
-
+        if outline_itens: outline_index[0] = max(0, outline_index[0] - 1)
     @teclas.add("down", filter=cond_outline_foco)
     def outline_baixo(event):
-        if outline_itens:
-            outline_index[0] = min(len(outline_itens) - 1, outline_index[0] + 1)
-
+        if outline_itens: outline_index[0] = min(len(outline_itens) - 1, outline_index[0] + 1)
     @teclas.add("enter", filter=cond_outline_foco)
     def outline_confirmar(event):
         if outline_itens:
             linha_alvo, _ = outline_itens[outline_index[0]]
             buffer.cursor_position = buffer.document.translate_row_col_to_index(linha_alvo, 0)
-        # Fecha e desafoca o sumário
-        outline_foco[0] = False
-        outline_visivel[0] = False
-
+        outline_foco[0] = False; outline_visivel[0] = False
     @teclas.add("escape", filter=cond_outline_foco)
     def outline_fechar(event):
-        # Fecha e desafoca o sumário
-        outline_foco[0] = False
-        outline_visivel[0] = False
+        outline_foco[0] = False; outline_visivel[0] = False
+
+    @teclas.add("c-l", filter=cond_normal)
+    def iniciar_selecao_linha(event):
+        row = event.current_buffer.document.cursor_position_row
+        selecao_linha.update(ativa=True, inicio=row, fim=row)
+        atualizar_selecao(event.current_buffer)
+
+    @teclas.add("up", filter=cond_selecao)
+    def selecao_cima(event):
+        selecao_linha["fim"] = max(0, selecao_linha["fim"] - 1)
+        atualizar_selecao(event.current_buffer)
+    @teclas.add("down", filter=cond_selecao)
+    def selecao_baixo(event):
+        maxrow = len(event.current_buffer.document.lines) - 1
+        selecao_linha["fim"] = min(maxrow, selecao_linha["fim"] + 1)
+        atualizar_selecao(event.current_buffer)
+    @teclas.add("escape", filter=cond_selecao)
+    def cancelar_selecao(event):
+        selecao_linha["ativa"] = False
+        event.current_buffer.exit_selection()
+
+    @teclas.add("c-g", filter=cond_normal)
+    def abrir_ir_linha(event):
+        modo_comando.update(ativo=True, texto="", erro="")
+
+    @teclas.add("escape", filter=cond_explorar)
+    def sair_explorar(event):
+        event.current_buffer.cursor_position = modo_explorar["posicao"]
+        modo_explorar["ativo"] = False
+    @teclas.add("enter", filter=cond_explorar)
+    def confirmar_explorar(event): modo_explorar["ativo"] = False
+    @teclas.add("c-e", filter=Condition(lambda: cond_normal() or cond_explorar()))
+    def explorar(event):
+        if modo_explorar["ativo"]:
+            modo_explorar["ativo"] = False
+        else:
+            modo_explorar.update(ativo=True, posicao=event.current_buffer.cursor_position)
+
+    @teclas.add("up", filter=Condition(lambda: cond_explorar()))
+    def explorar_cima(event): event.current_buffer.cursor_up()
+    @teclas.add("down", filter=Condition(lambda: cond_explorar()))
+    def explorar_baixo(event): event.current_buffer.cursor_down()
+    @teclas.add("pageup", filter=Condition(lambda: cond_normal() or cond_explorar()))
+    def pagina_cima(event): event.current_buffer.cursor_up(count=10)
+    @teclas.add("pagedown", filter=Condition(lambda: cond_normal() or cond_explorar()))
+    def pagina_baixo(event): event.current_buffer.cursor_down(count=10)
+
+    # Mini barra Ctrl+G: filtros exclusivos, isolando todos os atalhos do editor.
+    @teclas.add("enter", filter=cond_comando)
+    def confirmar_comando(event):
+        try:
+            row, col = interpretar_ir_linha(modo_comando["texto"], buffer.document.cursor_position_row + 1, len(buffer.document.lines))
+            buffer.cursor_position = buffer.document.translate_row_col_to_index(row, col if col is not None else 0)
+            modo_comando.update(ativo=False, erro="")
+        except ValueError as e:
+            modo_comando["erro"] = str(e)
+    @teclas.add("escape", filter=cond_comando)
+    def cancelar_comando(event): modo_comando.update(ativo=False, texto="", erro="")
+    @teclas.add("backspace", filter=cond_comando)
+    def apagar_comando(event): modo_comando["texto"] = modo_comando["texto"][:-1]
+    @teclas.add("c-u", filter=cond_comando)
+    def limpar_comando(event): modo_comando["texto"] = ""
+    for tecla_bloqueada in ("left", "right", "up", "down", "delete", "home", "end", "c-k"):
+        @teclas.add(tecla_bloqueada, filter=cond_comando, eager=True)
+        def bloquear_tecla_comando(event):
+            pass
+
+    @teclas.add(Keys.Any, filter=cond_comando)
+    def digitar_comando(event):
+        if event.data.isprintable():
+            modo_comando["texto"] += event.data
 
     try:
         lexer_inst = get_lexer_for_filename(caminho.name)
@@ -407,23 +621,21 @@ def main():
         else:
             estado = estado_salvamento[0]
 
+        doc = buffer.document
+        posicao = f"{doc.cursor_position_row + 1}:{doc.cursor_position_col + 1}"
+        modo = "[IR] " + modo_comando["texto"] + "_" if modo_comando["ativo"] else ("[EXP]" if modo_explorar["ativo"] else ("[SEL]" if selecao_linha["ativa"] else ""))
+        estado_curto = "● MOD" if modificado else ("✓ SALVO" if estado == "SALVO" else "! ERRO")
+        base = f" {caminho.name}  │  {estado_curto}  │  {posicao}"
+        if modo:
+            base += f"  │  {modo}"
+        extra = ("  ·  " + mensagem_status[0]) if mensagem_status[0] else ""
         if caminho.suffix == ".py" and analise["erro_sintaxe"] is not None:
             e = analise["erro_sintaxe"]
             linha = e.lineno if e.lineno is not None else "?"
-            coluna = e.offset if e.offset is not None else "?"
-            return [
-                (
-                    "class:status.error",
-                    f"  {caminho.name}  |  {estado}  |  Erro na linha {linha}, coluna {coluna}: {e.msg}"
-                )
-            ]
-
-        return [
-            (
-                "class:status",
-                f"  {estado}  |  Ctrl+S: salvar  |  Ctrl+O: sumário"
-            )
-        ]
+            return [("class:status.error", f"{base}  │  Sintaxe L{linha}: {e.msg}{extra}")]
+        if modo_comando["ativo"] and modo_comando["erro"]:
+            extra += "  ·  " + modo_comando["erro"]
+        return [("class:status", base + extra)]
 
     status = Window(
         content=FormattedTextControl(text=validar_sintaxe),
@@ -503,6 +715,9 @@ def main():
     )
     
     def texto_alterado(_):
+        if selecao_linha["ativa"] and not alteracao_bloco[0]:
+            selecao_linha["ativa"] = False
+            buffer.exit_selection()
         atualizar_analise()
         if outline_visivel[0]:
             atualizar_outline()
@@ -511,7 +726,7 @@ def main():
     buffer.on_text_changed += texto_alterado
 
     try:
-        sys.stdout.write("\033[2 q")
+        sys.stdout.write("\033[1 q")
         sys.stdout.flush()
         app.run()
     finally:
