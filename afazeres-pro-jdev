@@ -1,0 +1,40 @@
+JCODE
+- tab ta estranho. quando vou pro inicio de uma linha que ja esta indentada e passo ela pra linha de baixo, ele coloca mais 4 espacos
+> tipo nessa situacao abaixo:
+
+um if daqui:
+    if
+
+acaba indo pra ca se dou enter no inicio da linha:
+
+        if
+
+- quero poder voltar ao fim da linha anterior quando, no inicio da linha posterior, estiver na primeira coluna.
+> porque quando to no fim da linha e aperto a setinha da direita, ele pula pra linha de baixo, mas o mesmo nao acontece qnd to no inicio de uma linha vazia e aperto pra esquerda; ele nao vou pro fim da linha de cima. isso melhoraria a navegacao
+
+- quero configurar pro tab empurrar muitas linhas pra frente de uma vez so
+> facilita indentacao
+
+- o ctrl + c nao funciona aqui no termux, nao sei pq. e talvez o ctrl + v tbm nao funciona, nao tem como eu testar.
+- quero q ele autocomplete a linguagem C tambem, e identifique erros de sintaxe em tempo real assim como no python.
+- da pra animar o cursor pra ele piscar?
+- quer o que o pg down desca so 10 linhas, o msm pro pageup
+- da pra ter um jeito de eu so 'explorar' o codigo, sem mover o cursor de onde ele ja esta atuamente?
+- talvez criar o ctrl + g e procurar por linhas seja bom, agora.
+- me da ideias de como melhorar mais a navegacao msm, em geral. eh dificil explorar codigo grande manualmente usando mouse, imagina so com teclado
+
+JFILES:
+- mais opcoes no menu, pra renomear, mover e tal.
+- sera que daria pra criar uma miniatura de x codigo qnd o cursor do jfiles passar por cima de algum codigo? seria mto foda ver uma previa em miniatura de pixels do arquivo real.
+- fica meio feio aquele texto enorme de exclusao de arquivo. sei que eh pra chamar atencao, mas podia ser mais discreto
+- o status da ultima coisa feita ta meio feioso.
+
+JSHELL:
+- poder chamar o compilador de C
+- chamar o python3 pra executar meus trabalho ne porra, e mostrar no proprio jshell oq rolou com o programa
+
+JDEV COM UM TODO:
+continuar melhorando. nao tenho muito mais a acrescentar, por enquanto. so quero que fique bonito, profissional, fofo talvez.
+quero algo a minha cara, e ta dando certo demais programar tudo isso. que legal.
+to orgulhoso, mesmo com tudo sendo tao dificil.
+acho que a depressao nunca vai me vencerkkk
