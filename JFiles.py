@@ -54,6 +54,8 @@ acao_input = None
 
 # Mensagem temporária exibida no rodapé
 mensagem_status = ""
+modo_mover = False
+item_para_mover = None
 
 
 # ============================================================
@@ -263,7 +265,7 @@ def gerar_corpo():
     altura_maxima_itens = 15
     try:
         tamanho_tela = app.renderer.output.get_size()
-        altura_maxima_itens = max(3, tamanho_tela.rows - 6)
+        altura_maxima_itens = max(1, tamanho_tela.rows - 7)
     except Exception:
         pass
 
@@ -397,7 +399,7 @@ def gerar_rodape():
         linhas.append(
             (
                 "class:footer",
-                " ↑/↓ Navegar │ ENTER Abrir │ BACKSPACE Voltar │ CTRL+O Opções │ CTRL+Q Sair"
+                (" ↑/↓ Navegar │ ENTER Abrir │ BACKSPACE Voltar │ CTRL+O Opções │ CTRL+Q Sair" if not modo_mover else " MODO MOVER │ ENTER entrar na pasta │ M confirmar destino │ BACKSPACE voltar │ ESC cancelar")
             )
         )
 
@@ -462,7 +464,7 @@ def entrar(event):
         event.app.invalidate()
         return
 
-    if item.is_file():
+    if item.is_file() and not modo_mover:
         arquivo_para_abrir = item.resolve()
         event.app.exit()
 
@@ -481,6 +483,36 @@ def voltar(event):
     atualizar_lista()
     event.app.invalidate()
 
+
+@teclas.add("m", filter=Condition(lambda: modo_mover and not modo_input and not menu_visivel))
+def confirmar_destino_mover(event):
+    global modo_mover, item_para_mover
+    if item_para_mover is None:
+        modo_mover = False
+        return
+    destino = diretorio_atual / item_para_mover.name
+    try:
+        if destino.exists():
+            definir_status("✗ Já existe um item com esse nome no destino.")
+        elif item_para_mover.is_dir() and (diretorio_atual == item_para_mover or diretorio_atual in item_para_mover.parents):
+            definir_status("✗ Não é possível mover uma pasta para dentro dela mesma.")
+        else:
+            shutil.move(str(item_para_mover), str(destino))
+            definir_status(f"✓ Movido para: {diretorio_atual}")
+            modo_mover = False
+            item_para_mover = None
+            atualizar_lista()
+    except OSError as erro:
+        definir_status(f"✗ Erro ao mover: {erro}")
+    event.app.invalidate()
+
+@teclas.add("escape", filter=Condition(lambda: modo_mover and not modo_input and not menu_visivel))
+def cancelar_mover(event):
+    global modo_mover, item_para_mover
+    modo_mover = False
+    item_para_mover = None
+    definir_status("Movimentação cancelada.")
+    event.app.invalidate()
 
 # ============================================================
 # MENU
@@ -552,14 +584,18 @@ def menu_confirmar(event):
             acao_input = "copiar"
 
     elif escolha == 4: # Mover
+        global modo_mover, item_para_mover
         if not item:
             definir_status("✗ Nenhum item.")
             menu_visivel = False
+        elif item.is_dir() and (diretorio_atual == item or diretorio_atual in item.parents):
+            definir_status("✗ Não é possível mover uma pasta para dentro dela mesma.")
+            menu_visivel = False
         else:
-            modo_input = True
-            prompt_titulo = "Mover para"
-            input_texto = item.name
-            acao_input = "mover"
+            item_para_mover = item
+            modo_mover = True
+            menu_visivel = False
+            definir_status(f"Destino: {diretorio_atual} — navegue e pressione M para confirmar.")
 
     elif escolha == 5: # Informações
         modo_visualizacao = "info"
@@ -726,13 +762,15 @@ janela_borda_cabecalho = Window(
 corpo_layout = VSplit([
     janela_conteudo,
     
-    Window(
-        width=1,
-        char="│",
-        style="class:line-number.separator"
+    ConditionalContainer(
+        Window(width=1, char="│", style="class:line-number.separator"),
+        filter=Condition(lambda: app.renderer.output.get_size().columns >= 90)
     ),
     
-    janela_preview,
+    ConditionalContainer(
+        janela_preview,
+        filter=Condition(lambda: app.renderer.output.get_size().columns >= 90)
+    ),
 
     ConditionalContainer(
         Window(
