@@ -3,6 +3,7 @@ import ast
 import re
 import shutil
 import subprocess
+import asyncio
 from pathlib import Path
 from typing import Callable, List, Tuple, Set
 
@@ -28,6 +29,7 @@ from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 
 from prompt_toolkit.keys import Keys
+
 
 def calcular_indentacao_enter(linha: str, coluna: int) -> str:
     """Retorna a indentação anterior ao cursor, limitada à indentação da linha."""
@@ -90,13 +92,11 @@ PALAVRAS_CHAVE_PYTHON = [
     "len", "range", "str", "int", "float", "list", "dict", "set", "tuple", "bool"
 ]
 
+
 def extrair_identificadores(texto: str, arvore) -> Set[str]:
-    """Extrai palavras-chave, variáveis, funções e classes a partir de um AST já pronto
-    (ou, se o parse falhou, apenas por regex). Não faz parsing por conta própria — quem
-    chama é responsável por fornecer a árvore (ou None) já calculada uma única vez."""
+    """Extrai palavras-chave, variáveis, funções e classes a partir de um AST já pronto."""
     identificadores: Set[str] = set(PALAVRAS_CHAVE_PYTHON)
 
-    # 1. Extração por AST (Nomes de variáveis, funções, argumentos e classes)
     if arvore is not None:
         for no in ast.walk(arvore):
             if isinstance(no, ast.Name):
@@ -106,7 +106,6 @@ def extrair_identificadores(texto: str, arvore) -> Set[str]:
             elif isinstance(no, ast.arg):
                 identificadores.add(no.arg)
 
-    # 2. Extração por Regex (fallback para código com erros de sintaxe durante a digitação)
     tokens = re.findall(r"\b[a-zA-Z_]\w*\b", texto)
     identificadores.update(tokens)
 
@@ -114,8 +113,7 @@ def extrair_identificadores(texto: str, arvore) -> Set[str]:
 
 
 class DynamicPythonCompleter(Completer):
-    """Completer personalizado que sugere a partir de um conjunto de identificadores
-    já calculado (ver `extrair_identificadores`), evitando reparsear o buffer a cada tecla."""
+    """Completer personalizado que sugere a partir de um conjunto de identificadores precalculado."""
 
     def __init__(self, get_identificadores_func: Callable[[], Set[str]]) -> None:
         self.get_identificadores_func = get_identificadores_func
@@ -132,6 +130,7 @@ class DynamicPythonCompleter(Completer):
                     palavra,
                     start_position=-len(word_before_cursor)
                 )
+
 
 class IndentGuideProcessor(Processor):
     """Substitui os espaços de indentação no início das linhas por guias visuais."""
@@ -202,6 +201,13 @@ class CustomNumberedMargin(Margin):
         return result
 
 
+def sanitizar_texto_clipboard(texto: str) -> str:
+    """Remove caracteres nulos e sequências de controle ANSI que causam crash em navegadores."""
+    texto = texto.replace("\0", "")
+    texto = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', texto)
+    return texto
+
+
 def main():
     if len(sys.argv) < 2:
         print("Uso: python JCode.py <arquivo>")
@@ -226,9 +232,6 @@ def main():
         print(f"Erro: '{caminho}' é um diretório.")
         return
 
-    # Cache de análise: um único ast.parse() por mudança de texto, compartilhado entre
-    # o completer, o outline e a validação de sintaxe da status bar (antes eram 3 parses
-    # independentes a cada tecla digitada).
     LINGUAGENS = {
         ".py": set(PALAVRAS_CHAVE_PYTHON),
         ".c": set("auto break case char const continue default do double else enum extern float for goto if int long register return short signed sizeof static struct switch typedef union unsigned void volatile while printf scanf NULL size_t".split()),
@@ -259,7 +262,6 @@ def main():
         else:
             analise["identificadores"] = set(palavras_linguagem) | set(re.findall(r"\b[a-zA-Z_]\w*\b", texto_atual))
 
-    # Configuração do Autocomplete Dinâmico
     buffer = Buffer(complete_while_typing=True, auto_suggest=AutoSuggestFromHistory())
     completer_dinamico = DynamicPythonCompleter(
         get_identificadores_func=lambda: analise["identificadores"]
@@ -272,7 +274,6 @@ def main():
     estado_salvamento = ["ERRO: falha ao ler o arquivo — salvar está bloqueado" if erro_leitura else "SALVO"]
     leitura_falhou = [erro_leitura]
 
-    # Estados dos modos adicionais
     selecao_linha = {"ativa": False, "inicio": 0, "fim": 0}
     modo_explorar = {"ativo": False, "posicao": 0}
     modo_comando = {"ativo": False, "texto": "", "erro": ""}
@@ -280,14 +281,12 @@ def main():
     mensagem_status = [""]
     alteracao_bloco = [False]
 
-    # Estado do menu lateral (Outline)
     outline_visivel = [False]
     outline_foco = [False]
     outline_itens: List[Tuple[int, str]] = []
     outline_index = [0]
 
     def atualizar_outline():
-        """Monta o Outline a partir da árvore AST já calculada em `atualizar_analise`."""
         outline_itens.clear()
 
         if caminho.suffix != ".py" or analise["arvore"] is None:
@@ -298,7 +297,6 @@ def main():
                 outline_itens.append(
                     (no.lineno - 1, f"def {no.name}")
                 )
-
             elif isinstance(no, ast.ClassDef):
                 outline_itens.append(
                     (no.lineno - 1, f"class {no.name}")
@@ -313,7 +311,6 @@ def main():
             )
 
     def obter_texto_outline():
-        """Gera o texto formatado para a barra lateral do Outline."""
         if not outline_itens:
             return [("class:outline.empty", " Nenhum bloco encontrado\n")]
         
@@ -350,28 +347,76 @@ def main():
         if selecao_linha["ativa"]:
             atualizar_selecao(buf)
 
-    @teclas.add("tab", filter=Condition(lambda: cond_editor() and selecao_linha["ativa"]))
+    def transformar_linhas_selecionadas(buf, remover=False):
+        """Indenta as linhas cobertas por qualquer seleção, sem substituir o buffer inteiro."""
+        doc = buf.document
+        estado = buf.selection_state
+        if estado is None:
+            return False
+        a, b = sorted((estado.original_cursor_position, buf.cursor_position))
+        inicio = doc.translate_index_to_position(a).row
+        fim = doc.translate_index_to_position(b).row
+        linhas = buf.text.split("\n")
+        novas = indentar_bloco(linhas, inicio, fim, remover)
+        novo_texto = "\n".join(novas)
+        delta_inicio = 0 if remover else 4
+        # Aplicar como uma única edição mantém undo e evita saltos de cursor.
+        buf.cursor_position = 0
+        buf.delete(count=len(buf.text))
+        buf.insert_text(novo_texto, fire_event=True)
+        novo_a = doc.translate_row_col_to_index(inicio, 0) if False else sum(len(x) + 1 for x in novas[:inicio])
+        novo_b = novo_a + len(novas[inicio])
+        buf.cursor_position = novo_a
+        buf.start_selection()
+        buf.cursor_position = novo_b
+        return True
+
+    @teclas.add("tab", filter=Condition(lambda: cond_editor() and (selecao_linha["ativa"] or True)))
     def tab_bloco(event):
         buf = event.current_buffer
-        linhas = indentar_bloco(buf.text.split("\n"), selecao_linha["inicio"], selecao_linha["fim"])
-        alteracao_bloco[0] = True
-        try:
-            buf.text = "\n".join(linhas)
-        finally:
-            alteracao_bloco[0] = False
-        aceitar_selecao(buf)
+        if selecao_linha["ativa"]:
+            linhas = indentar_bloco(buf.text.split("\n"), selecao_linha["inicio"], selecao_linha["fim"])
+            alteracao_bloco[0] = True
+            try:
+                buf.text = "\n".join(linhas)
+            finally:
+                alteracao_bloco[0] = False
+            aceitar_selecao(buf)
+        elif buf.selection_state:
+            transformar_linhas_selecionadas(buf)
 
     @teclas.add("c-d", filter=Condition(lambda: cond_editor() and selecao_linha["ativa"]))
     @teclas.add("s-tab", filter=Condition(lambda: cond_editor() and selecao_linha["ativa"]))
     def dedent_bloco(event):
         buf = event.current_buffer
-        linhas = indentar_bloco(buf.text.split("\n"), selecao_linha["inicio"], selecao_linha["fim"], True)
-        alteracao_bloco[0] = True
-        try:
-            buf.text = "\n".join(linhas)
-        finally:
-            alteracao_bloco[0] = False
-        aceitar_selecao(buf)
+        if selecao_linha["ativa"]:
+            linhas = indentar_bloco(buf.text.split("\n"), selecao_linha["inicio"], selecao_linha["fim"], True)
+            alteracao_bloco[0] = True
+            try:
+                buf.text = "\n".join(linhas)
+            finally:
+                alteracao_bloco[0] = False
+            aceitar_selecao(buf)
+        elif buf.selection_state:
+            transformar_linhas_selecionadas(buf, remover=True)
+
+    @teclas.add("escape", "backspace", filter=cond_normal, eager=True)
+    def alt_backspace_seguro(event):
+        buf = event.current_buffer
+        doc = buf.document
+        col = doc.cursor_position_col
+        linha = doc.current_line
+        inicio_linha = doc.cursor_position - col
+        if col == 0:
+            return
+        prefixo = linha[:col]
+        if prefixo.isspace():
+            apagar = len(prefixo)
+        else:
+            m = re.search(r"[\w]+$", prefixo)
+            apagar = len(m.group(0)) if m else 1
+        buf.cursor_position = inicio_linha + col
+        buf.delete_before_cursor(count=apagar)
 
     @teclas.add("tab", filter=cond_normal)
     def tab(event):
@@ -440,30 +485,72 @@ def main():
         buf.delete(count=(line_end - line_start) + (1 if fim_absoluto < len(buf.text) else 0))
 
     def clipboard_escrever(texto):
+        texto = sanitizar_texto_clipboard(texto)
         erros = []
-        try:
-            pyperclip.copy(texto); return "pyperclip"
-        except Exception as e: erros.append(type(e).__name__)
-        exe = shutil.which("termux-clipboard-set")
-        if exe:
+
+        # 1. Suporte Wayland (previne crash no Firefox/GTK3)
+        if shutil.which("wl-copy"):
             try:
-                subprocess.run([exe], input=texto, text=True, timeout=2, check=True); return "Termux"
-            except Exception as e: erros.append(type(e).__name__)
+                subprocess.run(["wl-copy"], input=texto, text=True, timeout=2, check=True)
+                return "wl-clipboard (Wayland)"
+            except Exception as e:
+                erros.append(type(e).__name__)
+
+        # 2. Suporte Termux
+        exe_termux = shutil.which("termux-clipboard-set")
+        if exe_termux:
+            try:
+                subprocess.run([exe_termux], input=texto, text=True, timeout=2, check=True)
+                return "Termux"
+            except Exception as e:
+                erros.append(type(e).__name__)
+
+        # 3. Suporte xclip (X11 com seleção explicita)
+        if shutil.which("xclip"):
+            try:
+                subprocess.run(["xclip", "-selection", "clipboard"], input=texto, text=True, timeout=2, check=True)
+                return "xclip"
+            except Exception as e:
+                erros.append(type(e).__name__)
+
+        # 4. Fallback Pyperclip
+        try:
+            pyperclip.copy(texto)
+            return "pyperclip"
+        except Exception as e:
+            erros.append(type(e).__name__)
+
         clipboard_interno[0] = texto
         return "memória" + (" (externo indisponível)" if erros else "")
 
     def clipboard_ler():
-        erros = []
+        # 1. Wayland
+        if shutil.which("wl-paste"):
+            try:
+                r = subprocess.run(["wl-paste", "--no-newline"], capture_output=True, text=True, timeout=2, check=True)
+                if r.stdout:
+                    return sanitizar_texto_clipboard(r.stdout), "wl-clipboard"
+            except Exception:
+                pass
+
+        # 2. Termux
+        exe_termux = shutil.which("termux-clipboard-get")
+        if exe_termux:
+            try:
+                r = subprocess.run([exe_termux], capture_output=True, text=True, timeout=2, check=True)
+                if r.stdout:
+                    return sanitizar_texto_clipboard(r.stdout), "Termux"
+            except Exception:
+                pass
+
+        # 3. Pyperclip
         try:
             valor = pyperclip.paste()
-            if valor: return valor, "pyperclip"
-        except Exception as e: erros.append(type(e).__name__)
-        exe = shutil.which("termux-clipboard-get")
-        if exe:
-            try:
-                r = subprocess.run([exe], capture_output=True, text=True, timeout=2, check=True)
-                if r.stdout: return r.stdout, "Termux"
-            except Exception as e: erros.append(type(e).__name__)
+            if valor:
+                return sanitizar_texto_clipboard(valor), "pyperclip"
+        except Exception:
+            pass
+
         return clipboard_interno[0], "memória" if clipboard_interno[0] else "vazio/indisponível"
 
     @teclas.add("c-c", filter=cond_editor, eager=True)
@@ -564,7 +651,6 @@ def main():
     @teclas.add("pagedown", filter=Condition(lambda: cond_normal() or cond_explorar()))
     def pagina_baixo(event): event.current_buffer.cursor_down(count=10)
 
-    # Mini barra Ctrl+G: filtros exclusivos, isolando todos os atalhos do editor.
     @teclas.add("enter", filter=cond_comando)
     def confirmar_comando(event):
         try:
@@ -660,7 +746,6 @@ def main():
         style="class:background"
     )
 
-    # Menu de autocomplete flutuante, no estilo de editor
     layout_completions = FloatContainer(
         content=layout,
         floats=[
@@ -713,14 +798,35 @@ def main():
         style=estilo,
         mouse_support=True,
     )
-    
+
+    timer_analise = [None]
+
     def texto_alterado(_):
         if selecao_linha["ativa"] and not alteracao_bloco[0]:
             selecao_linha["ativa"] = False
             buffer.exit_selection()
-        atualizar_analise()
-        if outline_visivel[0]:
-            atualizar_outline()
+
+        lines_count = buffer.document.line_count
+        
+        # Debounce: se o arquivo tiver mais de 250 linhas, atrasa a analise sintatica pesada
+        if lines_count > 250:
+            if timer_analise[0] is not None:
+                timer_analise[0].cancel()
+            
+            loop = asyncio.get_event_loop()
+            
+            def reprocessar():
+                atualizar_analise()
+                if outline_visivel[0]:
+                    atualizar_outline()
+                app.invalidate()
+
+            timer_analise[0] = loop.call_later(0.3, reprocessar)
+        else:
+            atualizar_analise()
+            if outline_visivel[0]:
+                atualizar_outline()
+
         app.invalidate()
 
     buffer.on_text_changed += texto_alterado
@@ -732,7 +838,6 @@ def main():
     finally:
         sys.stdout.write("\033[6 q")
         sys.stdout.flush()
-
 
 if __name__ == "__main__":
     main()
