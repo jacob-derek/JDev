@@ -1,106 +1,113 @@
 # JDev
 
-> Um ambiente de desenvolvimento pessoal feito do zero, para terminal.
+> Um ambiente de desenvolvimento em Python, feito para o terminal, reunindo editor, shell e navegador de arquivos.
 
-O **JDev** é um conjunto de ferramentas que estou desenvolvendo para criar meu próprio ambiente de desenvolvimento no terminal.
+O **JDev** é um projeto pessoal em desenvolvimento. A ideia é construir um ambiente leve, modular e integrado para programar e trabalhar com arquivos sem sair do terminal.
 
-A ideia é simples: cada ferramenta funciona de forma independente, mas juntas elas formam um ambiente completo para trabalhar com código e arquivos.
+## Componentes
 
-```text
-JDev
-├── JShell   → terminal
-├── JCode    → editor de código
-└── JFiles   → gerenciador de arquivos
+| Componente | Descrição |
+|---|---|
+| **JCode** | Editor de código em tela cheia, com destaque de sintaxe e ferramentas para Python. |
+| **JShell** | Shell interativo com comandos próprios e acesso aos utilitários do JDev. |
+| **JFiles** | Navegador de arquivos em TUI, com operações de gerenciamento e preview. |
+| **JDevTodo** | Lista de tarefas em janela Tkinter flutuante para acompanhar o desenvolvimento. |
+
+## Funcionalidades
+
+### JCode — editor
+
+- Interface de terminal em tela cheia, construída com `prompt_toolkit`.
+- Edição de arquivos com salvamento por `Ctrl+S`.
+- Indicador de estado do arquivo: salvo ou modificado.
+- Números de linha e destaque da linha atual.
+- Guias visuais de indentação.
+- Realce de sintaxe por meio do Pygments, selecionado conforme a extensão/nome do arquivo.
+- Validação sintática de Python em tempo real, com indicação de linha, coluna e mensagem do erro.
+- Painel **Outline/Sumário** para arquivos Python, identificando funções, funções assíncronas e classes por meio da AST.
+- Navegação pelo sumário para saltar até uma definição.
+- Indentação com `Tab`.
+- Selecionar tudo, copiar, recortar e colar por atalhos implementados no editor.
+- Interface com tema escuro inspirado no Gruvbox.
+- Suporte a mouse.
+
+### JShell — shell
+
+- Prompt interativo com o diretório atual visível.
+- Autocomplete de comandos conhecidos.
+- Comandos próprios para navegação e gerenciamento de arquivos.
+- Integração para abrir o JCode e o JFiles.
+- Saída colorida e mensagens de erro/sucesso.
+- Expansão de `~` e suporte a caminhos relativos nos comandos de arquivo.
+
+#### Comandos disponíveis
+
+| Comando | Função |
+|---|---|
+| `help` | Exibe a ajuda de comandos. |
+| `exit` | Encerra o JShell. |
+| `clear` | Limpa a tela. |
+| `pwd` | Mostra o diretório atual. |
+| `ls` | Lista pastas e arquivos, com tamanhos. |
+| `cd <pasta>` | Muda o diretório atual. |
+| `mkdir <pasta>` | Cria uma pasta. |
+| `rd <pasta>` | Remove uma pasta vazia. |
+| `touch <arquivo>` | Cria um arquivo vazio. |
+| `ren <origem> <destino>` | Renomeia um arquivo ou pasta. |
+| `cp <origem> <destino>` | Copia arquivo ou pasta. |
+| `mv <origem> <destino>` | Move arquivo ou pasta. |
+| `rm <arquivo>` | Remove um arquivo. |
+| `cat <arquivo>` | Exibe o conteúdo de um arquivo. |
+| `open <arquivo>` | Abre um arquivo com o programa padrão do sistema. |
+| `jcode <arquivo>` | Abre um arquivo no JCode. |
+| `jcode new <arquivo>` | Abre um arquivo novo no JCode para criação. |
+| `jfiles` | Abre o navegador JFiles. |
+
+> Observação: o JShell é um shell com comandos próprios; não é um substituto completo do Bash. Para executar comandos arbitrários do sistema, use o terminal do sistema.
+
+### JFiles — navegador de arquivos
+
+- Interface TUI com navegação por teclado.
+- Pastas listadas antes dos arquivos, em ordem alfabética.
+- Ícones e tamanhos dos arquivos.
+- Preview do conteúdo de arquivos de texto e da lista de conteúdo de pastas.
+- Visualização de informações: caminho, tipo, extensão, tamanho, data de modificação e quantidade de itens em pastas.
+- Criar arquivos e pastas.
+- Renomear, copiar, mover e excluir itens.
+- Confirmação de exclusão.
+- Abertura de arquivos selecionados no JCode.
+- Mensagens de status e tratamento de erros de acesso/permissão.
+- Layout adaptável ao tamanho do terminal e suporte a mouse.
+
+### JDevTodo — lista de tarefas
+
+- Janela desktop feita com Tkinter.
+- Mantém-se acima das outras janelas.
+- Tarefas separadas por áreas do projeto.
+- Checkboxes e contador de tarefas concluídas.
+- Área rolável e botão para limpar as marcações.
+- Tema escuro alinhado à identidade visual do JDev.
+
+## Instalação
+
+### Requisitos
+
+- Python 3.10 ou superior (versão recomendada; o projeto pode funcionar em versões próximas compatíveis).
+- Terminal com suporte a sequências de controle ANSI.
+- Para a interface de tarefas: Tkinter.
+- Bibliotecas Python usadas pelo projeto:
+
+```bash
+pip install prompt_toolkit pygments pyperclip
 ```
 
-## 🧩 Componentes
+Em algumas distribuições Linux, o Tkinter precisa ser instalado pelo gerenciador de pacotes do sistema. No Debian, por exemplo:
 
-### JShell
-
-Um shell próprio para executar comandos e servir como ponto de entrada do ambiente JDev.
-
-```text
-JShell
-├── comandos do sistema
-├── integração com JCode
-└── integração com JFiles
+```bash
+sudo apt install python3-tk
 ```
 
-### JCode
-
-Um editor de código executado diretamente no terminal.
-
-Construído com `prompt_toolkit`, possui interface própria, edição de arquivos, navegação pelo código e uma barra de status no rodapé.
-
-### JFiles
-
-Um gerenciador de arquivos para navegar pelos diretórios e trabalhar com os arquivos diretamente pelo terminal.
-
-A ideia é que ele possa ser usado sozinho ou aberto através do JShell.
-
----
-
-## 🔗 Feitos para trabalhar juntos
-
-Um dos objetivos principais do JDev é fazer com que as ferramentas possam conversar entre si.
-
-Por exemplo:
-
-```text
-              ┌─────────┐
-              │ JShell  │
-              └────┬────┘
-                   │
-          ┌────────┴────────┐
-          ▼                 ▼
-      ┌────────┐        ┌────────┐
-      │ JCode  │        │ JFiles │
-      └────────┘        └────────┘
-```
-
-Mas elas também podem funcionar individualmente.
-
-A ideia é manter cada programa simples e independente, enquanto a integração transforma o conjunto em um ambiente maior.
-
----
-
-## 🛠️ Tecnologias
-
-O projeto é desenvolvido principalmente em **Python**.
-
-Algumas das tecnologias utilizadas:
-
-* Python
-* `prompt_toolkit`
-* `pyperclip`
-* `pathlib`
-* `ast`
-* `subprocess`
-
----
-
-## 🚧 Estado do projeto
-
-O JDev ainda está em desenvolvimento.
-
-Atualmente, o projeto já possui:
-
-* [x] JShell
-* [x] JCode
-* [x] JFiles
-* [x] Interface de terminal
-* [x] Edição de arquivos
-* [x] Navegação por arquivos
-* [x] Integração entre ferramentas
-* [ ] Mais comandos para o JShell
-* [ ] Melhorias na integração entre os programas
-* [ ] Mais recursos para o JCode
-* [ ] Mais recursos para o JFiles
-* [ ] Documentação completa
-
----
-
-## 🚀 Executando
+## Como executar
 
 Clone o repositório:
 
@@ -109,43 +116,63 @@ git clone https://github.com/jacob-derek/JDev.git
 cd JDev
 ```
 
-Depois, execute a ferramenta desejada.
+Inicie o shell:
 
-> Os comandos de execução podem mudar conforme o projeto evolui.
+```bash
+python3 JShell.py
+```
 
----
+Abra o navegador de arquivos diretamente:
 
-## 🗺️ Roadmap
+```bash
+python3 JFiles.py
+```
 
-Algumas coisas que pretendo explorar no futuro:
+Abra a lista de tarefas:
 
-* Melhorar a integração entre JShell, JCode e JFiles
-* Criar mais comandos próprios
-* Melhorar a experiência de edição no JCode
-* Expandir o gerenciamento de arquivos
-* Criar configurações personalizáveis
-* Melhorar a documentação
-* Deixar o ambiente cada vez mais consistente
+```bash
+python3 JDevTodo.py
+```
 
-O roadmap não é fixo. O projeto está sendo construído conforme novas ideias aparecem.
+O JCode normalmente é iniciado pelo JShell ou pelo JFiles:
 
----
+```bash
+python3 JCode.py caminho/para/arquivo.py
+```
 
-## 💡 Sobre o projeto
+## Estrutura do projeto
 
-O JDev começou como uma ideia de criar minhas próprias ferramentas para desenvolvimento no terminal.
+```text
+JDev/
+├── JCode.py       # Editor de código
+├── JShell.py      # Shell interativo
+├── JFiles.py      # Navegador e gerenciador de arquivos
+├── JDevTodo.py    # Lista de tarefas desktop
+└── README.md
+```
 
-Mais do que apenas fazer um editor ou um shell, a intenção é experimentar e entender como essas ferramentas funcionam por dentro, construindo tudo aos poucos.
+## Tecnologias
 
-É um projeto pessoal e ainda está em evolução.
+- Python
+- `prompt_toolkit` — interface interativa de terminal
+- Pygments — realce de sintaxe
+- Python AST — análise estrutural de código Python
+- `pyperclip` — integração com a área de transferência
+- Tkinter / ttk — janela da lista de tarefas
 
-**Cada parte do JDev existe porque eu quis construir.**
+## Em desenvolvimento
 
----
+Algumas ideias registradas para versões futuras:
 
-## 📌 Projeto
+- Abas no JCode e terminais secundários.
+- Busca no editor e navegação direta para uma linha.
+- Melhorias no Outline e autocomplete de símbolos.
+- Execução de código diretamente pelo JCode.
+- Autocomplete de caminhos no JShell.
+- Histórico de comandos e informações do sistema.
+- Busca no JFiles e escolha entre abrir ou executar arquivos.
+- Integração mais profunda entre os componentes e configuração/tema compartilhados.
 
-**JDev**
-GitHub: https://github.com/jacob-derek/JDev
+## Estado do projeto
 
-Feito por **Jacob Derek**.
+O JDev está em desenvolvimento ativo. Recursos, atalhos e compatibilidade podem mudar entre versões.
