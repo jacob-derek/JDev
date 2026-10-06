@@ -48,6 +48,8 @@ def mudar_diretorio(caminho):
     except PermissionError:
         imprimir(f"<error>Erro:</error> Sem permissão para acessar esse diretório.")
 
+def git():
+    pass
 
 def remover_diretorio(caminho):
     pasta = Path(caminho).expanduser()
@@ -274,11 +276,15 @@ def executar_comando(comando):
             )
             return True
 
-    if nome == "jfiles":
-        abrir_jfiles()
+        renomear(partes[1], partes[2])
         return True
 
-        renomear(partes[1], partes[2])
+    if nome == "git":
+        imprimir("<info>Uso:</info> <command>git</command> <arg>operacao</arg>")
+        return True
+
+    if nome == "jfiles":
+        abrir_jfiles()
         return True
 
     if nome == "ls":
@@ -345,6 +351,7 @@ def main():
             "mkdir",
             "touch",
             "ren",
+            "git",
             "jcode",
             "jfiles",
             "new",
