@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 JTerminal - janela de terminal (TTY) simples para o JShell.
 
@@ -13,7 +14,6 @@ Uso:
     python JTerminal.py                  -> abre o JShell.py (mesma pasta)
     python JTerminal.py outro_comando    -> abre outro comando no terminal
 """
-
 import codecs
 import os
 import queue
