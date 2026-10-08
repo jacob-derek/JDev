@@ -659,7 +659,6 @@ def cmd_cp(args):
         status |= _copiar(origem, alvo, "r" in flags or "R" in flags, "f" in flags)
     return status
 
-
 @comando("mv", "[-f] origem... destino", "Move/renomeia arquivos e pastas (-f sobrescreve)",
          "Arquivos", aliases=("move",))
 def cmd_mv(args):
@@ -847,6 +846,7 @@ def cmd_tail(args):
         if not ultimo.endswith("\n"):
             escrever("\n")
         if "f" in flags and len(pos) == 1:
+
             sys.stdout.flush()
             while True:
                 linha = f.readline()
@@ -1419,7 +1419,7 @@ def montar_prompt():
     ramo = ramo_git()
     sufixo = f" <command>({esc(ramo)})</command>" if ramo else ""
     cor = "prompt" if STATUS == 0 else "error"
-    return HTML(f"<info>{esc(cwd)}</info>{sufixo}\n<{cor}>JShell></{cor}>")
+    return HTML(f"<info>{esc(cwd)}</info>{sufixo}<{cor}>$</{cor}>")
 
 
 class JCompleter(Completer):
