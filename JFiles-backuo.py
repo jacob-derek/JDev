@@ -4,11 +4,6 @@ import sys
 import shutil
 import datetime
 
-try:
-    from PIL import Image
-except ImportError:
-    Image = None
-
 from prompt_toolkit import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout, HSplit, VSplit, Window
@@ -26,7 +21,6 @@ diretorio_atual = Path.cwd().resolve()
 itens = []
 indice_selecionado = 0
 inicio_janela = 0
-mostrar_ocultos = False
 
 JCODE = Path(__file__).resolve().parent / "JCode.py"
 arquivo_para_abrir = None
@@ -118,8 +112,6 @@ def obter_itens():
             return []
 
         conteudo = list(diretorio_atual.iterdir())
-        if not mostrar_ocultos:
-            conteudo = [item for item in conteudo if not item.name.startswith(".")]
 
         pastas = sorted(
             [
@@ -244,66 +236,6 @@ def remover_item():
 # INTERFACE E PREVIEW
 # ============================================================
 
-EXTENSOES_IMAGEM = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
-
-
-def tamanho_terminal():
-    """Obtém dimensões seguras mesmo durante a inicialização/redimensionamento."""
-    try:
-        tamanho = app.renderer.output.get_size()
-        return max(1, tamanho.columns), max(1, tamanho.rows)
-    except Exception:
-        tamanho = shutil.get_terminal_size((80, 24))
-        return max(1, tamanho.columns), max(1, tamanho.lines)
-
-
-def gerar_preview_imagem(item):
-    """Desenha uma miniatura com blocos Unicode e cores RGB, sem protocolo gráfico especial."""
-    linhas = [("class:outline.header", " ── IMAGEM ──\n\n")]
-
-    try:
-        tamanho_bytes = item.stat().st_size
-        linhas.append(("class:item", f" Arquivo: {item.name}\n"))
-        linhas.append(("class:item", f" Tamanho: {formatar_tamanho(tamanho_bytes)}\n"))
-
-        if Image is None:
-            linhas.append(("class:empty", "\n Instale Pillow para miniaturas:\n pip install pillow\n"))
-            return linhas
-
-        with Image.open(item) as original:
-            largura_original, altura_original = original.size
-            formato = original.format or item.suffix.lstrip(".").upper()
-            linhas.append(("class:item", f" Formato: {formato}\n"))
-            linhas.append(("class:item", f" Dimensões: {largura_original} × {altura_original}\n\n"))
-
-            # Cada caractere ocupa uma coluna e representa dois pixels verticais.
-            colunas, _ = tamanho_terminal()
-            largura_maxima = max(8, min(32, (colunas - 8) // 2))
-            altura_maxima = 12
-            miniatura = original.convert("RGB")
-            miniatura.thumbnail((largura_maxima, altura_maxima * 2), Image.Resampling.LANCZOS)
-            largura, altura = miniatura.size
-            pixels = miniatura.load()
-
-            for y in range(0, altura, 2):
-                partes = []
-                for x in range(largura):
-                    topo = pixels[x, y]
-                    baixo = pixels[x, y + 1] if y + 1 < altura else topo
-                    fg = "#%02x%02x%02x" % topo
-                    bg = "#%02x%02x%02x" % baixo
-                    partes.append((f"fg:{fg} bg:{bg}", "▀"))
-                linhas.extend(partes)
-                linhas.append(("class:preview", "\n"))
-
-            if getattr(original, "n_frames", 1) > 1:
-                linhas.append(("class:empty", "\n GIF/animação: exibindo o primeiro quadro.\n"))
-
-    except Exception as erro:
-        linhas.append(("class:empty", f" [Não foi possível abrir a imagem: {erro}]\n"))
-
-    return linhas
-
 def gerar_cabecalho():
     return [
         (
@@ -330,8 +262,12 @@ def gerar_corpo():
         )
         return linhas
 
-    _, linhas_terminal = tamanho_terminal()
-    altura_maxima_itens = max(1, linhas_terminal - 7)
+    altura_maxima_itens = 15
+    try:
+        tamanho_tela = app.renderer.output.get_size()
+        altura_maxima_itens = max(1, tamanho_tela.rows - 7)
+    except Exception:
+        pass
 
     if indice_selecionado < inicio_janela:
         inicio_janela = indice_selecionado
@@ -401,10 +337,6 @@ def gerar_preview():
             
         return linhas
 
-    # Miniatura de imagem (renderizada com blocos RGB, compatível com terminais de texto modernos).
-    if item.is_file() and item.suffix.lower() in EXTENSOES_IMAGEM:
-        return gerar_preview_imagem(item)
-
     # Modo preview padrão
     try:
         if item.is_dir():
@@ -467,7 +399,7 @@ def gerar_rodape():
         linhas.append(
             (
                 "class:footer",
-                ((" ↑/↓ Navegar │ ENTER Abrir │ BACKSPACE Voltar │ F3 Ocultos: " + ("SIM" if mostrar_ocultos else "NÃO") + " │ CTRL+O Opções │ CTRL+Q Sair") if not modo_mover else " MODO MOVER │ ENTER entrar na pasta │ M confirmar destino │ BACKSPACE voltar │ ESC cancelar")
+                (" ↑/↓ Navegar │ ENTER Abrir │ BACKSPACE Voltar │ CTRL+O Opções │ CTRL+Q Sair" if not modo_mover else " MODO MOVER │ ENTER entrar na pasta │ M confirmar destino │ BACKSPACE voltar │ ESC cancelar")
             )
         )
 
@@ -581,16 +513,6 @@ def cancelar_mover(event):
     item_para_mover = None
     definir_status("Movimentação cancelada.")
     event.app.invalidate()
-
-@teclas.add("f3", filter=Condition(lambda: not modo_input and not menu_visivel and not modo_mover))
-def alternar_ocultos(event):
-    global mostrar_ocultos, inicio_janela
-    mostrar_ocultos = not mostrar_ocultos
-    inicio_janela = 0
-    atualizar_lista()
-    definir_status("Arquivos ocultos visíveis." if mostrar_ocultos else "Arquivos ocultos escondidos.")
-    event.app.invalidate()
-
 
 # ============================================================
 # MENU
@@ -837,36 +759,32 @@ janela_borda_cabecalho = Window(
     style="class:border"
 )
 
-janela_menu_compacta = Window(
-    content=FormattedTextControl(text=obter_texto_menu),
-    style="class:outline"
-)
-
-colunas_preview = Condition(lambda: tamanho_terminal()[0] >= 90 and not menu_visivel)
-menu_lateral = Condition(lambda: menu_visivel and tamanho_terminal()[0] >= 80)
-menu_compacto = Condition(lambda: menu_visivel and tamanho_terminal()[0] < 80)
-lista_visivel = Condition(lambda: not (menu_visivel and tamanho_terminal()[0] < 80))
-
 corpo_layout = VSplit([
-    ConditionalContainer(janela_conteudo, filter=lista_visivel),
-
+    janela_conteudo,
+    
     ConditionalContainer(
         Window(width=1, char="│", style="class:line-number.separator"),
-        filter=colunas_preview
+        filter=Condition(lambda: app.renderer.output.get_size().columns >= 90)
     ),
-
+    
     ConditionalContainer(
         janela_preview,
-        filter=colunas_preview
+        filter=Condition(lambda: app.renderer.output.get_size().columns >= 90)
     ),
 
     ConditionalContainer(
-        Window(width=1, char="│", style="class:line-number.separator"),
-        filter=menu_lateral
+        Window(
+            width=1,
+            char="│",
+            style="class:line-number.separator"
+        ),
+        filter=Condition(lambda: menu_visivel)
     ),
 
-    ConditionalContainer(janela_menu, filter=menu_lateral),
-    ConditionalContainer(janela_menu_compacta, filter=menu_compacto),
+    ConditionalContainer(
+        janela_menu,
+        filter=Condition(lambda: menu_visivel)
+    ),
 ])
 
 janela_borda_rodape = Window(
@@ -898,16 +816,15 @@ estilo = Style.from_dict({
     "border": "fg:#504945 bg:#282828",
     "selected": "bg:#3c3836 fg:#fabd2f bold",
     "item": "fg:#ebdbb2 bg:#282828",
-    "preview": "fg:#ebdbb2 bg:#282828",
     "empty": "fg:#928374 bg:#282828 italic",
     "footer": "bg:#1d2021 fg:#a89984 bold",
     "status": "bg:#3c3836 fg:#b8bb26 bold",
     "prompt": "bg:#fb4934 fg:#1d2021 bold",
     "outline": "bg:#1d2021",
-    "outline.header": "fg:#fe8019 bg:#1d2021 bold",
-    "outline.help": "fg:#928374 bg:#1d2021",
+    "outline.header": "fg:#fe8019 bold",
+    "outline.help": "fg:#928374",
     "outline.selected": "bg:#3c3836 fg:#fabd2f bold",
-    "outline.item": "fg:#ebdbb2 bg:#1d2021",
+    "outline.item": "fg:#ebdbb2",
     "line-number.separator": "fg:#504945 bg:#282828",
 })
 
