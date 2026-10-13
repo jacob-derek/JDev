@@ -350,18 +350,22 @@ def _tipo(e):
     return "o"
 
 
-def listar(alvo=None, detalhes=False, ordem="nome", inverter=False):
+def listar(alvo=None, detalhes=False, ordem="nome", 
+        inverter=False, mostrar_ocultos=False):
     pasta = Path(alvo).expanduser() if alvo else Path.cwd()
 
     try:
         with os.scandir(pasta) as it:
-            entradas = list(it)
+            entradas = [
+                e for e in it
+                if mostrar_ocultos or not e.name.startswith(".")
+            ]
+            
     except FileNotFoundError:
         return erro(f"Não encontrado: {fmt(pasta)}")
     except NotADirectoryError:
         return erro(f"Isso não é um diretório: {fmt(pasta)}")
     except PermissionError:
-        imprimir(f"<info>📂 {esc(str(pasta))}</info>")
         imprimir("<secondary>" + "─" * 55 + "</secondary>")
         return erro("Sem permissão para acessar este diretório.")
 
@@ -372,7 +376,8 @@ def listar(alvo=None, detalhes=False, ordem="nome", inverter=False):
         except OSError:
             st = None
         itens.append((e, _tipo(e), st))
-
+        
+        
     def chave(it):
         e, t, st = it
         grupo = 0 if t == "d" else 1
@@ -385,7 +390,6 @@ def listar(alvo=None, detalhes=False, ordem="nome", inverter=False):
     itens.sort(key=chave, reverse=inverter)
 
     linhas = [
-        f"<info>📂 {esc(str(pasta))}</info>",
         "<secondary>" + "─" * 55 + "</secondary>",
     ]
 
