@@ -5,3 +5,10 @@ venv/
 CONFIGRICESENAC/
 imagens/
 tools/
+JClassroom/
+
+credentials.json
+token.json
+*.pyc
+
+jclass.log
