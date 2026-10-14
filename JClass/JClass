@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Launcher opcional: usa o .venv do projeto, de qualquer pasta.
+DIR="$(dirname "$(readlink -f "$0")")"
+exec "$DIR/.venv/bin/python" "$DIR/JClass.py" "$@"

@@ -3,6 +3,7 @@ import subprocess
 import sys
 import shutil
 import datetime
+import os
 
 try:
     from PIL import Image
@@ -929,6 +930,17 @@ app = Application(
 # MAIN
 # ============================================================
 
+def comando_para(arquivo: Path):
+    """Escolhe o programa certo pela extensão."""
+    if arquivo.suffix.lower() == ".pdf":
+        gui = os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+        if gui and shutil.which("zathura"):
+            return ["zathura", str(arquivo)], True
+        if shutil.which("pdftotext"):
+            return ["sh", "-c", 'pdftotext -layout "$1" - | less -R', "_", str(arquivo)], False
+    return [sys.executable, str(JCODE), str(arquivo)], False
+
+
 if __name__ == "__main__":
     while True:
         atualizar_lista()
@@ -938,15 +950,15 @@ if __name__ == "__main__":
             break
 
         try:
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(JCODE),
-                    str(arquivo_para_abrir)
-                ],
-                check=False
-            )
-
+            cmd, destacar = comando_para(arquivo_para_abrir)
+            if destacar:  # janela gráfica: não prende o terminal
+                subprocess.Popen(cmd, start_new_session=True,
+                                 stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL)
+            else:
+                subprocess.run(cmd, check=False)
+        
         except OSError as erro:
             definir_status(
                 f"Erro ao abrir o JCode: {erro}"
