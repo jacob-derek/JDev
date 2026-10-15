@@ -25,8 +25,10 @@ from prompt_toolkit.shortcuts import clear as pt_clear
 from prompt_toolkit.styles import Style
 
 BASE_DIR = Path(__file__).resolve().parent
+
 JCODE = BASE_DIR / "JCode.py"
 JFILES = BASE_DIR / "JFiles.py"
+JCLASS = BASE_DIR / "JClass.py"
 HISTORICO = Path.home() / ".jshell_history"
 RC = Path.home() / ".jshellrc"
 IS_WIN = os.name == "nt"
@@ -49,7 +51,7 @@ estilo_jshell = Style.from_dict({
 
 STATUS = 0          # código de saída do último comando
 SESSAO = None       # PromptSession (usada pelo comando history)
-ALIASES = {"ll": "ls -l", "..": "cd ..", "...": "cd ../.."}
+ALIASES = {"ll": "ls", "..": "cd ..", "...": "cd ../.."}
 
 COMANDOS = {}       # nome/alias -> (função, expandir_glob)
 AJUDA = []          # (grupo, nome, uso, descrição) na ordem de declaração
@@ -355,11 +357,12 @@ def listar(alvo=None, detalhes=False, ordem="nome",
     pasta = Path(alvo).expanduser() if alvo else Path.cwd()
 
     try:
-        with os.scandir(pasta) as it:
-            entradas = [
-                e for e in it
-                if mostrar_ocultos or not e.name.startswith(".")
-            ]
+        for linha in range(3):
+            with os.scandir(pasta) as it:
+                entradas = [
+                    e for e in it
+                    if mostrar_ocultos or not e.name.startswith(".")
+                ]
             
     except FileNotFoundError:
         return erro(f"Não encontrado: {fmt(pasta)}")
@@ -470,6 +473,17 @@ def abrir_jfiles():
         return subprocess.run([sys.executable, str(JFILES)]).returncode
     except KeyboardInterrupt:
         imprimir("\n<secondary>JFiles interrompido.</secondary>")
+        return 130
+
+
+def abrir_jclass():
+    if not JCLASS.exists():
+        return erro(f"JClass não encontrado: {fmt(JCLASS)}")
+    
+    try:
+        return subprocess.run([sys.executable, str(JCLASS)]).returncode
+    except KeyboardInterrupt:
+        imprimir("\n<secondary>JClass interrompido.<\secondary>")
         return 130
 
 
@@ -1170,6 +1184,10 @@ def cmd_git(args):
 
 
 # ── JShell ───────────────────────────────────────────────────────────────────
+
+def cmd_jclass():
+    return abrir_jclass()
+
 
 @comando("jcode", "arquivo", "Abre um arquivo no JCode", "JShell")
 def cmd_jcode(args):
