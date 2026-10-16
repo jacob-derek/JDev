@@ -14,6 +14,7 @@ Dependências:
 Uso:
     python JTerm.py                  -> abre o JShell.py (mesma pasta)
     python JTerm.py outro_comando    -> abre outro comando no terminal
+    python JDesk.py                  -> ambiente com vários painéis (usa PtyPane daqui)
 
 Atalhos:
     Ctrl+Shift+C / Ctrl+Insert   copiar (Ctrl+C copia se houver seleção)
@@ -232,18 +233,60 @@ class TermScreen(pyte.Screen):
         self.on_title(param)
 
 
-# ── Janela ───────────────────────────────────────────────────────────────────
-class JTerminal:
-    def __init__(self, root, argv):
-        self.root = root
-        root.title("JShell")
-        root.geometry("900x580")
-        root.minsize(300, 150)
-        root.configure(bg=DEFAULT_BG)
+# ── Painel: um pty + emulador + widget (reutilizável em janela única ou no JDesk) ──
+BORDER_IDLE = "#292e42"
+BORDER_FOCUS = "#7aa2f7"
+HEADER_FG_IDLE = "#565f89"
+HEADER_FG_FOCUS = "#1a1b26"
 
+_family_cache = None
+
+
+def pick_family():
+    global _family_cache
+    if _family_cache is None:
         families = set(font.families())
-        family = next((f for f in FONT_CANDIDATES if f in families), "TkFixedFont")
-        self.font = font.Font(family=family, size=12)
+        _family_cache = next((f for f in FONT_CANDIDATES if f in families), "TkFixedFont")
+    return _family_cache
+
+
+def enable_dpi_awareness():
+    if IS_WINDOWS:  # texto nítido e tamanhos corretos em telas com escala > 100%
+        try:
+            import ctypes
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except Exception:
+                ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+class PtyPane(tk.Frame):
+    """Um terminal completo (pty + pyte + Text) dentro de um Frame.
+
+    exit_mode:
+      "close"   -> comportamento clássico do JTerm: processo sai => chama on_close
+      "restart" -> processo sai => mostra o código e espera Enter (ou o host) reiniciar
+    key_filter(pane, evento) -> True se o host consumiu a tecla (atalhos do JDesk)
+    O processo só é iniciado quando o widget já tem tamanho real (evita pty 24x80 errado).
+    """
+
+    def __init__(self, parent, argv, name="JShell", cwd=None, env_extra=None, header=False,
+                 exit_mode="close", on_title=None, on_close=None, key_filter=None,
+                 on_focus=None, font_size=12):
+        super().__init__(parent, bg=BORDER_IDLE, bd=0, highlightthickness=0)
+        self.argv = list(argv)
+        self.name = name
+        self.cwd = cwd or os.getcwd()
+        self.env_extra = env_extra or {}
+        self.exit_mode = exit_mode
+        self.on_title = on_title
+        self.on_close = on_close
+        self.key_filter = key_filter
+        self.on_focus = on_focus
+
+        self.font = font.Font(family=pick_family(), size=font_size)
         self.font_bold = self.font.copy()
         self.font_bold.configure(weight="bold")
         self.font_italic = self.font.copy()
@@ -252,56 +295,41 @@ class JTerminal:
         self.font_bold_italic.configure(slant="italic")
         self.update_metrics()
 
+        self.header = None
+        if header:
+            self.header = tk.Label(self, text=f" {name.upper()} ", bg=BORDER_IDLE, fg=HEADER_FG_IDLE,
+                                   anchor="w", font=("TkDefaultFont", 9, "bold"), bd=0, pady=0)
+            self.header.pack(fill=tk.X)
+
         self.text = tk.Text(
-            root, bg=DEFAULT_BG, fg=DEFAULT_FG, font=self.font, wrap="none",
+            self, bg=DEFAULT_BG, fg=DEFAULT_FG, font=self.font, wrap="none",
             bd=0, highlightthickness=0, padx=PAD, pady=PAD, insertwidth=0,
             selectbackground=SELECT_BG, selectforeground=DEFAULT_FG,
             spacing1=0, spacing2=0, spacing3=0, cursor="xterm", undo=False,
         )
-        self.text.pack(fill=tk.BOTH, expand=True)
-        self.text.focus_set()
+        if header:
+            self.text.pack(fill=tk.BOTH, expand=True, padx=1, pady=(0, 1))
+        else:
+            self.text.pack(fill=tk.BOTH, expand=True)
 
         self.tags = {}            # estilo -> nome da tag do Tk
         self.style_cache = {}     # (campos do Char, é_cursor) -> estilo
         self.color_cache = {}
         self.line_cache = {}      # linha da tela -> runs atualmente desenhados
-        self.history = []         # linhas que saíram pelo topo (já em runs)
-        self.offset = 0           # quantas linhas o usuário rolou para cima
-        self.alt_saved = None
-        self.pending = ""         # sequência de escape cortada entre dois blocos
-        self.last_cursor_y = 0
-        self.exited = False
-        self.waiting_close = False
-        self.resize_job = None
         self.tag_counter = 0
-        self.queue = queue.Queue(maxsize=128)   # limite = contrapressão no processo
+        self.resize_job = None
+        self.started = False      # processo já foi iniciado alguma vez
+        self.destroyed = False    # painel encerrado de vez
+        self.dead = False         # processo terminou (painel segue na tela)
+        self.visible = True
+        self.waiting_close = False
+        self.waiting_restart = False
+        self.pty = None
+        self.stop_io = None
+        self.queue = queue.Queue(maxsize=128)
         self.write_queue = queue.Queue()
-
-        root.update()
-        rows, cols = self.calc_size()
-        self.rows, self.cols = rows, cols
-
-        self.screen = TermScreen(cols, rows, self.send, self.on_scroll_out,
-                                 self.clear_history, self.set_title)
-        self.stream = pyte.Stream(self.screen)
-        self.reset_text_lines()
-
-        env = os.environ.copy()
-        env["TERM"] = "xterm-256color"
-        env["COLORTERM"] = "truecolor"
-        env["PYTHONUNBUFFERED"] = "1"
-        env["PYTHONIOENCODING"] = "utf-8"
-
-        try:
-            Backend = WinPty if IS_WINDOWS else UnixPty
-            self.pty = Backend(argv, rows, cols, env, os.getcwd())
-        except Exception as exc:
-            messagebox.showerror("JTerminal", f"Não foi possível iniciar:\n{' '.join(argv)}\n\n{exc!r}")
-            root.destroy()
-            raise SystemExit(1)
-
-        threading.Thread(target=self.reader, daemon=True).start()
-        threading.Thread(target=self.writer, daemon=True).start()
+        self.rows, self.cols = 24, 80
+        self._new_emulator()
 
         self.text.bind("<Key>", self.on_key)
         self.text.bind("<Button-1>", lambda e: self.text.focus_set())
@@ -311,9 +339,110 @@ class JTerminal:
         self.text.bind("<Button-4>", self.on_wheel)
         self.text.bind("<Button-5>", self.on_wheel)
         self.text.bind("<Configure>", self.on_configure)
-        root.protocol("WM_DELETE_WINDOW", self.close)
+        self.text.bind("<FocusIn>", self._focus_in)
 
-        self.root.after(BUSY_MS, self.pump)
+    # ── ciclo de vida do processo ──
+    def _new_emulator(self):
+        self.screen = TermScreen(self.cols, self.rows, self.send, self.on_scroll_out,
+                                 self.clear_history, self.set_title)
+        self.stream = pyte.Stream(self.screen)
+        self.history = []         # linhas que saíram pelo topo (já em runs)
+        self.offset = 0           # quantas linhas o usuário rolou para cima
+        self.alt_saved = None
+        self.pending = ""         # sequência de escape cortada entre dois blocos
+        self.last_cursor_y = 0
+        self.reset_text_lines()
+
+    def start_process(self):
+        if self.destroyed:
+            return
+        self.rows, self.cols = self.calc_size()
+        self.dead = self.waiting_close = self.waiting_restart = False
+        self._new_emulator()
+
+        env = os.environ.copy()
+        env.update({"TERM": "xterm-256color", "COLORTERM": "truecolor",
+                    "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"})
+        env.update(self.env_extra)
+
+        q = self.queue = queue.Queue(maxsize=128)   # limite = contrapressão no processo
+        wq = self.write_queue = queue.Queue()
+        try:
+            Backend = WinPty if IS_WINDOWS else UnixPty
+            pty = self.pty = Backend(self.argv, self.rows, self.cols, env, self.cwd)
+        except Exception as exc:
+            self.pty = None
+            if self.exit_mode == "close":
+                messagebox.showerror("JTerminal", f"Não foi possível iniciar:\n{' '.join(self.argv)}\n\n{exc!r}")
+                if self.on_close:
+                    self.on_close(self)
+                return
+            self.dead = self.waiting_restart = True
+            self.feed(f"\x1b[31mNão foi possível iniciar: {' '.join(self.argv)}\r\n{exc!r}\r\n"
+                      f"[Enter reinicia]\x1b[0m\r\n")
+            self.safe_render()
+            return
+
+        self.stop_io = threading.Event()
+        threading.Thread(target=self.reader, args=(pty, q, self.stop_io), daemon=True).start()
+        threading.Thread(target=self.writer, args=(pty, wq, self.stop_io), daemon=True).start()
+
+    def kill_process(self):
+        if self.stop_io:
+            self.stop_io.set()
+        try:
+            self.write_queue.put(None)
+        except Exception:
+            pass
+        if self.pty:
+            try:
+                self.pty.close()
+            except Exception:
+                pass
+        self.pty = None
+
+    def restart(self):
+        if self.destroyed:
+            return
+        self.kill_process()
+        self.start_process()
+
+    def shutdown(self):
+        if self.destroyed:
+            return
+        self.destroyed = True
+        self.kill_process()
+        try:
+            self.destroy()
+        except tk.TclError:
+            pass
+
+    # ── foco / visibilidade / aparência ──
+    def focus_text(self):
+        self.text.focus_set()
+
+    def _focus_in(self, _e):
+        if self.on_focus:
+            self.on_focus(self)
+
+    def set_active(self, active):
+        bg = BORDER_FOCUS if active else BORDER_IDLE
+        self.configure(bg=bg)
+        if self.header:
+            self.header.configure(bg=bg, fg=HEADER_FG_FOCUS if active else HEADER_FG_IDLE)
+
+    def set_header(self, text):
+        if self.header:
+            self.header.configure(text=f" {text} ")
+
+    def set_visible(self, visible):
+        if visible == self.visible:
+            return
+        self.visible = visible
+        if visible:  # o que chegou enquanto estava escondido é desenhado agora
+            self.line_cache.clear()
+            self.screen.dirty.update(range(self.screen.lines))
+            self.safe_render()
 
     # ── tamanho / fonte ──
     def update_metrics(self):
@@ -332,23 +461,31 @@ class JTerminal:
         self.screen.dirty.update(range(self.rows))
 
     def on_configure(self, _event):
+        if self.destroyed:
+            return
+        if not self.started:
+            if self.text.winfo_width() > 60 and self.text.winfo_height() > 40:
+                self.started = True
+                self.after_idle(self.start_process)
+            return
         if self.resize_job:
-            self.root.after_cancel(self.resize_job)
-        self.resize_job = self.root.after(60, self.apply_resize)
+            self.after_cancel(self.resize_job)
+        self.resize_job = self.after(60, self.apply_resize)
 
     def apply_resize(self, force=False):
         self.resize_job = None
-        if self.exited:
+        if self.destroyed or not self.started:
             return
         rows, cols = self.calc_size()
         if not force and (rows, cols) == (self.rows, self.cols):
             return
         self.rows, self.cols = rows, cols
         self.screen.resize(rows, cols)
-        self.pty.set_size(rows, cols)
+        if self.pty:
+            self.pty.set_size(rows, cols)
         self.offset = min(self.offset, len(self.history))
         self.reset_text_lines()
-        self.render()
+        self.safe_render()
 
     def zoom(self, delta):
         size = max(FONT_MIN, min(FONT_MAX, int(self.font.cget("size")) + delta))
@@ -358,41 +495,49 @@ class JTerminal:
         self.apply_resize(force=True)
 
     def set_title(self, title):
-        try:
-            self.root.title(title or "JShell")
-        except tk.TclError:
-            pass
+        if self.on_title:
+            try:
+                self.on_title(self, title)
+            except tk.TclError:
+                pass
 
-    # ── threads de E/S ──
-    def reader(self):
-        while True:
-            data = self.pty.read()
+    # ── threads de E/S (uma dupla por processo; 'stop' invalida threads antigas) ──
+    def reader(self, pty, q, stop):
+        while not stop.is_set():
+            data = pty.read()
             if data is None:
                 break
-            if data:
-                self.queue.put(data)
-        self.queue.put(("exit", self.pty.wait_exit()))
+            while data and not stop.is_set():
+                try:
+                    q.put(data, timeout=0.2)
+                    break
+                except queue.Full:
+                    continue
+        if not stop.is_set():
+            q.put(("exit", pty.wait_exit()))
 
-    def writer(self):
+    def writer(self, pty, wq, stop):
         # escrever no PTY pode bloquear (buffer cheio); por isso nunca é feito na thread da UI
         while True:
-            data = self.write_queue.get()
-            if data is None:
+            data = wq.get()
+            if data is None or stop.is_set():
                 return
-            self.pty.write(data)
+            pty.write(data)
 
     def send(self, text):
         self.write_queue.put(text)
 
-    # ── ciclo principal: consome saída, atualiza emulador e desenha ──
-    def pump(self):
-        if self.exited:
-            return
+    # ── consumo da saída (chamado pelo Pump com um orçamento de tempo) ──
+    def has_output(self):
+        return not self.queue.empty()
+
+    def drain(self, budget):
+        if self.destroyed:
+            return False
         busy = False
-        exit_code = None
-        got_exit = False
+        got_exit, exit_code = False, None
         try:
-            deadline = time.perf_counter() + FEED_BUDGET
+            deadline = time.perf_counter() + budget
             while time.perf_counter() < deadline:
                 try:
                     item = self.queue.get_nowait()
@@ -407,24 +552,31 @@ class JTerminal:
                 except Exception:
                     # o emulador nunca pode derrubar o ciclo (isso congelaria a janela)
                     self.pending = ""
-            if busy:
+            if busy and self.visible:
                 self.safe_render()
             if got_exit:
                 self.on_process_exit(exit_code)
         except Exception:
             pass
-        finally:
-            if not self.exited:
-                self.root.after(BUSY_MS if busy else IDLE_MS, self.pump)
+        return busy
 
     def on_process_exit(self, code):
-        if code in (0, None) or not KEEP_OPEN_ON_ERROR:
-            self.close()
-            return
-        self.waiting_close = True
+        self.dead = True
+        if self.exit_mode == "close":
+            if code in (0, None) or not KEEP_OPEN_ON_ERROR:
+                if self.on_close:
+                    self.on_close(self)
+                return
+            self.waiting_close = True
+            msg = f"[processo finalizado com código {code} — pressione Enter para fechar]"
+        else:
+            self.waiting_restart = True
+            msg = (f"[processo finalizado com código {code if code is not None else '?'} — "
+                   f"Enter reinicia]")
+        if self.alt_saved is not None:
+            self.set_alt_screen(False)
         self.snap_bottom()
-        self.feed(f"\r\n\x1b[31m[processo finalizado com código {code} — "
-                  f"pressione Enter para fechar]\x1b[0m\r\n")
+        self.feed(f"\r\n\x1b[31m{msg}\x1b[0m\r\n")
         self.safe_render()
 
     # ── emulação ──
@@ -593,7 +745,7 @@ class JTerminal:
                 pass
 
     def render(self):
-        if self.exited:
+        if self.destroyed:
             return
         s = self.screen
         if len(self.tags) > MAX_TAGS:
@@ -629,9 +781,17 @@ class JTerminal:
         if ks in MODIFIER_KEYS:
             return "break"
 
+        # atalhos do host (JDesk) têm prioridade sobre tudo, inclusive painel finalizado
+        if self.key_filter and self.key_filter(self, e):
+            return "break"
+
         if self.waiting_close:
-            if ks in ("Return", "KP_Enter", "Escape"):
-                self.close()
+            if ks in ("Return", "KP_Enter", "Escape") and self.on_close:
+                self.on_close(self)
+            return "break"
+        if self.waiting_restart:
+            if ks in ("Return", "KP_Enter"):
+                self.restart()
             return "break"
 
         ctrl = bool(e.state & 0x4)
@@ -707,7 +867,7 @@ class JTerminal:
         else:
             d = 1 if e.delta > 0 else -1
 
-        if e.state & 0x4:  # Ctrl + roda = zoom
+        if e.state & 0x4:  # Ctrl + roda = zoom (por painel)
             self.zoom(d)
         elif self.alt_saved is not None:  # app de tela cheia: roda vira setas
             app = MODE_APP_CURSOR in self.screen.mode
@@ -733,8 +893,8 @@ class JTerminal:
         except tk.TclError:
             return
         sel = "\n".join(line.rstrip() for line in sel.split("\n"))
-        self.root.clipboard_clear()
-        self.root.clipboard_append(sel)
+        self.clipboard_clear()
+        self.clipboard_append(sel)
         self.text.tag_remove("sel", "1.0", "end")
 
     def paste(self, _event=None, primary=False):
@@ -746,7 +906,7 @@ class JTerminal:
                 data = None
         if data is None:
             try:
-                data = self.root.clipboard_get()
+                data = self.clipboard_get()
             except tk.TclError:
                 return "break"
         data = data.replace("\r\n", "\n").replace("\r", "\n").replace("\x1b", "")
@@ -757,16 +917,57 @@ class JTerminal:
         self.send(data)
         return "break"
 
-    # ── encerramento ──
-    def close(self):
-        if self.exited:
+
+# ── Pump: um único ciclo que divide o orçamento de tempo entre os painéis ────
+class Pump:
+    def __init__(self, root, get_panes):
+        self.root = root
+        self.get_panes = get_panes
+        self.running = True
+        root.after(BUSY_MS, self.tick)
+
+    def stop(self):
+        self.running = False
+
+    def tick(self):
+        if not self.running:
             return
-        self.exited = True
-        self.write_queue.put(None)
+        busy = False
         try:
-            self.pty.close()
+            ativos = [p for p in list(self.get_panes()) if not p.destroyed and p.has_output()]
+            if ativos:  # painéis sem saída não custam nada
+                share = FEED_BUDGET / len(ativos)
+                for p in ativos:
+                    busy = p.drain(share) or busy
         except Exception:
             pass
+        if self.running:
+            try:
+                self.root.after(BUSY_MS if busy else IDLE_MS, self.tick)
+            except tk.TclError:
+                pass
+
+
+# ── Janela única (comportamento original do JTerm) ───────────────────────────
+class JTerminal:
+    def __init__(self, root, argv):
+        self.root = root
+        root.title("JShell")
+        root.geometry("900x580")
+        root.minsize(300, 150)
+        root.configure(bg=DEFAULT_BG)
+
+        self.pane = PtyPane(root, argv, name="JShell", exit_mode="close",
+                            on_title=lambda p, t: root.title(t or "JShell"),
+                            on_close=lambda p: self.close())
+        self.pane.pack(fill=tk.BOTH, expand=True)
+        self.pane.focus_text()
+        self.pump = Pump(root, lambda: [self.pane])
+        root.protocol("WM_DELETE_WINDOW", self.close)
+
+    def close(self):
+        self.pump.stop()
+        self.pane.shutdown()
         try:
             self.root.destroy()
         except tk.TclError:
@@ -779,16 +980,7 @@ def main():
     else:
         argv = [sys.executable, os.path.join(BASE_DIR, "JShell.py")]
 
-    if IS_WINDOWS:  # texto nítido e tamanhos corretos em telas com escala > 100%
-        try:
-            import ctypes
-            try:
-                ctypes.windll.shcore.SetProcessDpiAwareness(1)
-            except Exception:
-                ctypes.windll.user32.SetProcessDPIAware()
-        except Exception:
-            pass
-
+    enable_dpi_awareness()
     root = tk.Tk()
     JTerminal(root, argv)
     root.mainloop()

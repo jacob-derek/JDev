@@ -1,0 +1,10 @@
+pyte
+psutil
+# Windows apenas:
+pywinpty; sys_platform == 'win32'
+pycaw; sys_platform == 'win32'
+comtypes; sys_platform == 'win32'
+# JClass:
+google-api-python-client
+google-auth-oauthlib
+prompt_toolkit
