@@ -27,6 +27,7 @@ from prompt_toolkit.styles import Style
 BASE_DIR = Path(__file__).resolve().parent
 JCODE = BASE_DIR / "JCode.py"
 JFILES = BASE_DIR / "JFiles.py"
+JCLASS = BASE_DIR / "JClass" / "JClass.py"
 HISTORICO = Path.home() / ".jshell_history"
 RC = Path.home() / ".jshellrc"
 IS_WIN = os.name == "nt"

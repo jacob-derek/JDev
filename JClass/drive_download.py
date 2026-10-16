@@ -32,6 +32,21 @@ NAO_BAIXAVEIS = {
     PREFIXO_GOOGLE + "shortcut": "É um atalho do Drive; abra pelo navegador.",
 }
 
+# Extensões para arquivos comuns do Drive cujo nome pode vir sem sufixo.
+# O MIME type é a fonte de verdade; não altera nomes que já têm extensão.
+EXTENSOES_MIME: dict[str, str] = {
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-excel": ".xls",
+    "text/plain": ".txt",
+    "text/csv": ".csv",
+    "application/zip": ".zip",
+}
+
 
 @dataclass
 class Resultado:
@@ -125,6 +140,11 @@ def baixar_arquivo(
                 nome += ext
             req = drive.files().export_media(fileId=file_id, mimeType=mime_exp)
         else:
+            # Arquivos Office/PDF podem chegar com título sem extensão.
+            # Acrescenta a extensão correspondente ao MIME type, se faltar.
+            ext = EXTENSOES_MIME.get(mime)
+            if ext and not Path(nome).suffix:
+                nome += ext
             req = drive.files().get_media(fileId=file_id, supportsAllDrives=True)
 
         pasta.mkdir(parents=True, exist_ok=True)
