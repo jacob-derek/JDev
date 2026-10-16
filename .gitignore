@@ -1,14 +1,27 @@
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-CONFIGRICESENAC/
-imagens/
-tools/
-JClassroom/
-
+# Segredos / credenciais
 credentials.json
 token.json
-*.pyc
+client_secret*.json
+*.pem
+*.key
+.env
+.env.*
+!.env.example
 
-jclass.log
+# Conteúdo baixado do Classroom (ajuste para a(s) sua(s) pasta(s) de download)
+Downloads/
+downloads/
+*.pptx
+*.ppt
+*.part
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Cache do JSlides (Fase 4) e lixo de editor
+.jcache/
+.vscode/
+.idea/
