@@ -36,6 +36,13 @@ from classroom_api import (
 from drive_download import baixar_arquivo, criar_servico_drive, nome_seguro
 from testar_classroom import BASE, CREDENTIALS_FILE, SCOPES, TOKEN_FILE, autenticar
 
+# jipc.py fica na raiz do JDev (pasta acima de JClass/); é opcional.
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+try:
+    import jipc
+except ImportError:
+    jipc = None
+
 COURSE_ID_PADRAO = "869369061852"
 MIN_COLS, MIN_ROWS = 60, 14
 LOG_FILE = BASE / "jclass.log"
@@ -407,7 +414,7 @@ class JClass:
             ops.append(("Baixar este arquivo", lambda: self.pedir_download([it])))
             ops.append(("Desmarcar" if it.selecionado else "Marcar para download", lambda: setattr(it, "selecionado", not it.selecionado)))
             if it.caminho and it.caminho.exists():
-                ops.append(("Abrir arquivo baixado", lambda: self.abrir_externo(str(it.caminho))))
+                ops.append(("Abrir arquivo baixado", lambda: self.abrir_baixado(it.caminho)))
         ops.append(("Abrir no navegador", lambda: self.abrir_url(it.url)))
         ops.append(("Copiar link", lambda: self.copiar(it.url)))
         ops.append(("Ver aviso completo", lambda: self.abrir_texto(it.aviso)))
@@ -432,6 +439,13 @@ class JClass:
             self.avisar("Sem ambiente gráfico aqui (TTY). Use 'Copiar link' ou leia a URL no painel.", "ansiyellow")
             return
         self.abrir_externo(url)
+
+    def abrir_baixado(self, caminho: Path) -> None:
+        """Dentro do JDesk abre no painel certo; senão, no programa padrão do sistema."""
+        if jipc is not None and jipc.enviar({"cmd": "open", "path": str(caminho)}):
+            self.avisar("Aberto no JDesk.", "ansigreen")
+            return
+        self.abrir_externo(str(caminho))
 
     def abrir_externo(self, alvo: str) -> None:
         opener = shutil.which("xdg-open")
@@ -545,6 +559,8 @@ class JClass:
                     it.selecionado = False
                 if r.status == "ok":
                     it.progresso = 1.0
+                    if jipc is not None and r.caminho:  # JFiles relê a pasta na hora (≤0,3 s, nunca falha)
+                        jipc.enviar({"cmd": "refresh", "path": str(Path(r.caminho).parent)})
             except Exception as exc:
                 it.status, it.mensagem = "erro", str(traduzir_erro(exc, "drive"))
                 if not isinstance(exc, (JClassError, HttpError)):
