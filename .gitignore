@@ -25,3 +25,8 @@ venv/
 .jcache/
 .vscode/
 .idea/
+archive/
+backups/
+*.zip
+*.log
+tools/JShell/jshell
