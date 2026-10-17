@@ -55,6 +55,13 @@ from prompt_toolkit.styles import Style
 from pygments.lexers import get_lexer_for_filename
 from pygments.util import ClassNotFound
 
+try:  # canal de mensagens do JDesk (opcional: sem ele o JCode funciona como sempre)
+    import jipc
+except ImportError:
+    jipc = None
+
+PEDIDOS: List[str] = []  # arquivos que o JDesk pediu para abrir (preenchido pela thread do jipc)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Ajustes (mexa aqui se quiser mudar o comportamento)
@@ -612,15 +619,12 @@ class CustomNumberedMargin(Margin):
 # ──────────────────────────────────────────────────────────────────────────────
 # Programa principal
 # ──────────────────────────────────────────────────────────────────────────────
-def main():
+def editar(arg_caminho: str) -> None:
+    """Abre o editor para um arquivo e só volta quando o usuário sai dele."""
     # ast.parse pode emitir SyntaxWarning (ex.: "\d" em string); no meio da TUI isso suja a tela.
     warnings.simplefilter("ignore", SyntaxWarning)
 
-    if len(sys.argv) < 2:
-        print("Uso: python JCode.py <arquivo>")
-        return
-
-    caminho = Path(sys.argv[1])
+    caminho = Path(arg_caminho)
     if caminho.is_dir():
         print(f"Erro: '{caminho}' é um diretório.")
         return
@@ -1297,6 +1301,28 @@ def main():
     app.ttimeoutlen = ESC_TIMEOUT
     app.timeoutlen = 0.3
 
+    # ── Pedidos de abertura vindos do JDesk ───────────────────────────────────
+    # Sem alterações pendentes: troca de arquivo na hora. Com alterações: avisa e
+    # espera o usuário salvar (Ctrl+S) ou sair (Ctrl+Q); nada é descartado sozinho.
+    async def vigiar_pedidos() -> None:
+        avisado = False
+        while True:
+            await asyncio.sleep(0.15)
+            if not PEDIDOS:
+                avisado = False
+                continue
+            if buffer.text == texto_salvo[0]:
+                app.exit()
+                return
+            if not avisado:
+                avisado = True
+                avisar(f"Pedido para abrir {Path(PEDIDOS[-1]).name}: salve (Ctrl+S) ou saia (Ctrl+Q).", 8.0)
+
+    def iniciar_vigia() -> None:
+        criar = getattr(app, "create_background_task", None)
+        if criar is not None:
+            criar(vigiar_pedidos())
+
     # ── Análise em segundo plano ──────────────────────────────────────────────
     # A digitação só faz trabalho O(1): marca a versão e agenda. Parse, índice de
     # autocomplete e sumário rodam numa única thread, depois de uma pausa, e só
@@ -1388,7 +1414,7 @@ def main():
         if tty:
             sys.stdout.write("\033[1 q")
             sys.stdout.flush()
-        app.run()
+        app.run(pre_run=iniciar_vigia)
     except Exception as exc:
         # Última barreira: guarda o que estava no buffer antes de sair.
         registrar_erro(exc)
@@ -1406,6 +1432,114 @@ def main():
         if tty:
             sys.stdout.write("\033[6 q")
             sys.stdout.flush()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Modo idle (painel JCode do JDesk) e laço principal
+# ══════════════════════════════════════════════════════════════════════════════
+def _receber(msg: dict) -> None:
+    """Chamado na thread do jipc."""
+    if msg.get("cmd") == "open" and msg.get("path"):
+        PEDIDOS.append(str(msg["path"]))
+
+
+def tela_idle(ultimo: Optional[str]) -> Optional[str]:
+    """Tela de espera. Devolve o caminho pedido, ou None se o usuário saiu (Ctrl+Q)."""
+    if PEDIDOS:
+        caminho = PEDIDOS.pop()
+        PEDIDOS.clear()
+        return caminho
+
+    from prompt_toolkit.layout import WindowAlign
+    from prompt_toolkit.layout.containers import VerticalAlign
+
+    def texto():
+        linhas = [
+            ("class:titulo", "J C o d e\n"),
+            ("class:dim", "modo idle\n\n"),
+            ("class:texto", "Aguardando um arquivo.\n"),
+            ("class:dim", "Enter no JFiles (ou  jcode arquivo  no JShell) abre aqui.\n\n"),
+        ]
+        if ultimo:
+            linhas.append(("class:dim", f"último: {ultimo}\n\n"))
+        linhas.append(("class:dim", "Ctrl+Q sai"))
+        return linhas
+
+    kb = KeyBindings()
+
+    @kb.add("c-q")
+    def _(event):
+        event.app.exit(result=None)
+
+    async def vigiar() -> None:
+        while True:
+            await asyncio.sleep(0.15)
+            if PEDIDOS:
+                caminho = PEDIDOS.pop()
+                PEDIDOS.clear()
+                app_idle.exit(result=caminho)
+                return
+
+    corpo = Window(FormattedTextControl(texto), align=WindowAlign.CENTER, dont_extend_height=True)
+    app_idle = Application(
+        layout=Layout(HSplit([corpo], align=VerticalAlign.CENTER)),
+        key_bindings=kb,
+        full_screen=True,
+        style=Style.from_dict({
+            "": "bg:#282828 #ebdbb2",
+            "titulo": "#fe8019 bold",
+            "texto": "#ebdbb2",
+            "dim": "#928374",
+        }),
+    )
+
+    def pre_run() -> None:
+        criar = getattr(app_idle, "create_background_task", None)
+        if criar is not None:
+            criar(vigiar())
+
+    return app_idle.run(pre_run=pre_run)
+
+
+def main() -> None:
+    args = sys.argv[1:]
+    # Só o painel "jcode" do JDesk vira um editor residente (idle + recebe pedidos).
+    # Um JCode aberto pelo JShell/JFiles dentro do JDesk continua efêmero, como sempre.
+    residente = jipc is not None and jipc.disponivel() and os.environ.get("JDESK_PANE") == "jcode"
+
+    if not args and not residente:
+        print("Uso: python JCode.py <arquivo>")
+        return
+
+    receptor = None
+    if residente:
+        receptor = jipc.Receptor("jcode", _receber)
+        receptor.iniciar()
+
+    proximo: Optional[str] = args[0] if args else None
+    ultimo: Optional[str] = None
+    try:
+        while True:
+            if proximo is None:
+                proximo = tela_idle(ultimo)
+                if proximo is None:
+                    return
+            try:
+                editar(proximo)
+            except Exception as exc:
+                registrar_erro(exc)
+                if not residente:
+                    raise
+            ultimo = Path(proximo).name
+            proximo = PEDIDOS.pop() if PEDIDOS else None
+            PEDIDOS.clear()
+            if proximo is None:
+                if not residente:
+                    return
+                jipc.enviar({"cmd": "focus", "target": "jfiles"})  # fechou o arquivo: devolve o foco
+    finally:
+        if receptor:
+            receptor.parar()
 
 
 if __name__ == "__main__":

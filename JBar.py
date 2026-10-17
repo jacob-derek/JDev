@@ -37,6 +37,7 @@ CYAN = "#7dcfff"
 DARK = "#1a1b26"
 
 INTERVAL = 1.5  # segundos entre coletas
+VOLUME_STEP = 5  # percentual por movimento do scroll
 
 
 # ── Volume ───────────────────────────────────────────────────────────────────
@@ -59,6 +60,57 @@ def _amixer():
     if not vol:
         return None
     return int(vol.group(1)), "[off]" in out
+
+
+def adjust_volume(delta):
+    """Ajusta o volume do sistema; delta deve ser +1 ou -1."""
+    step = VOLUME_STEP if delta > 0 else -VOLUME_STEP
+    try:
+        if shutil.which("pactl"):
+            subprocess.run(
+                ["pactl", "set-sink-volume", "@DEFAULT_SINK@", f"{step:+d}%"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=1.0, check=False,
+            )
+            return
+        if shutil.which("amixer"):
+            # amixer aceita incrementos/decrementos como "5%+" e "5%-".
+            amount = f"{abs(step)}%{'+' if step > 0 else '-'}"
+            subprocess.run(
+                ["amixer", "set", "Master", amount],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=1.0, check=False,
+            )
+            return
+        if IS_MAC and shutil.which("osascript"):
+            subprocess.run(
+                ["osascript", "-e", f"set volume output volume (output volume of (get volume settings) {'+' if step > 0 else '-'} {abs(step)})"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=1.0, check=False,
+            )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def toggle_mute():
+    """Liga/desliga o mudo do sistema."""
+    try:
+        if shutil.which("pactl"):
+            cmd = ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "toggle"]
+        elif shutil.which("amixer"):
+            cmd = ["amixer", "set", "Master", "toggle"]
+        elif IS_MAC and shutil.which("osascript"):
+            cmd = ["osascript", "-e", "set volume output muted (not (output muted of (get volume settings)))"]
+        else:
+            return
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0, check=False)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def em_thread(fn, *args):
+    """Roda fn fora da thread da interface (pactl pode demorar e congelaria o Tk)."""
+    threading.Thread(target=fn, args=args, daemon=True).start()
 
 
 def _osascript():
@@ -229,6 +281,13 @@ class StatusBar(tk.Frame):
             lb.pack(side=tk.LEFT, padx=7)
             self.lb[key] = lb
 
+        # O scroll só altera o volume quando o ponteiro está sobre VOL.
+        self.lb["vol"].configure(cursor="hand2")
+        self.lb["vol"].bind("<Button-4>", lambda e: self._volume_scroll(+1))
+        self.lb["vol"].bind("<Button-5>", lambda e: self._volume_scroll(-1))
+        self.lb["vol"].bind("<MouseWheel>", self._volume_mousewheel)
+        self.lb["vol"].bind("<Button-1>", lambda e: (em_thread(toggle_mute), "break")[1])  # clique = mudo
+
         # relógio (centro de verdade, independente da largura dos lados)
         self.clock = tk.Label(self, text="", bg=BAR_BG, fg=FG, font=self.font_bold, bd=0)
         self.clock.place(relx=0.5, rely=0.5, anchor="center")
@@ -262,6 +321,15 @@ class StatusBar(tk.Frame):
             except tk.TclError:
                 pass
             self.job = None
+
+    def _volume_scroll(self, direction):
+        em_thread(adjust_volume, direction)
+        return "break"
+
+    def _volume_mousewheel(self, event):
+        if event.delta == 0:
+            return "break"
+        return self._volume_scroll(+1 if event.delta > 0 else -1)
 
     # ── atualização (só lê o snapshot; nada bloqueante aqui) ──
     def refresh(self):

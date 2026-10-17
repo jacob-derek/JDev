@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-JDesk - ambiente de terminal com vários painéis (Fases 1-2).
+JDesk - ambiente de terminal com vários painéis (Fases 1-3).
 
   [ workspaces |      hora      | vol · ram · net · cpu ]
   [                    JFILES                    ]
@@ -20,6 +20,7 @@ programa do painel focado):
     Alt+z                           maximiza / restaura o painel focado
     Alt+r                           reinicia o painel se o processo já terminou
     Alt+Shift+R                     reinicia o painel mesmo com o processo vivo
+    Alt+= / Alt+-                   volume do sistema +5% / -5%   (Alt+m = mudo)
     Alt+Shift+Q                     fecha o JDesk
     Enter (painel finalizado)       reinicia o painel
 
@@ -30,11 +31,13 @@ Dependências: pip install pyte psutil   (+ pywinpty, pycaw no Windows)
               psutil é opcional (sem ele a barra mostra "--" nas métricas)
 """
 import os
+import queue
 import sys
 import tkinter as tk
 from tkinter import messagebox
 
-from JBar import Metrics, StatusBar
+import jipc
+from JBar import Metrics, StatusBar, adjust_volume, em_thread, toggle_mute
 from JTerm import (ALT_MASK, BASE_DIR, BORDER_IDLE, DEFAULT_BG, Pump, PtyPane,
                    enable_dpi_awareness)
 
@@ -46,22 +49,9 @@ MIN_ROW, MAX_ROW = 0.20, 0.80
 MIN_COL = 0.12
 STEP = 0.04
 
-# Placeholder do JCode até a Fase 3 (modo idle real). O JCode atual exige um arquivo
-# e sairia na hora; aqui o painel fica de pé esperando.
-JCODE_IDLE = r'''
-import time
-print("\x1b[2J\x1b[H")
-print("  \x1b[1;34mJCode\x1b[0m \x1b[90m· modo idle\x1b[0m\n")
-print("  Aguardando um arquivo para abrir.")
-print("  \x1b[90m(Fase 3: JFiles/JShell/JClass vão mandar 'abrir' para este painel.)\x1b[0m\n")
-print("  Por enquanto, no JShell:  jcode caminho/do/arquivo")
-try:
-    while True:
-        time.sleep(3600)
-except KeyboardInterrupt:
-    pass
-'''
-
+# Extensões que pertencem a um visualizador (JSlides, Fase 4). Enquanto ele não existir,
+# o "open" falha e o programa de origem cai no comportamento antigo (ex.: zathura/xdg-open).
+VIEWER_EXT = {".pptx", ".ppt", ".odp", ".pdf"}
 
 def achar(nome):
     """Procura o script em JDev/ e em JDev/<Nome>/ (ex.: JDev/JClass/JClass.py)."""
@@ -84,7 +74,7 @@ def comandos():
     return {
         "jfiles": programa("JFiles.py"),
         "jshell": programa("JShell.py"),
-        "jcode": [sys.executable, "-c", JCODE_IDLE],
+        "jcode": programa("JCode.py"),  # sem argumentos: modo idle, espera o "open" do jipc
         "jclass": programa("JClass.py"),
     }
 
@@ -107,7 +97,8 @@ class Workspace:
         for nome in ORDER:
             self.panes[nome] = PtyPane(
                 self.frame, cmds[nome], name=nome, header=True, exit_mode="restart",
-                env_extra={"JDESK": "1", "JDESK_PANE": nome, "JDESK_WS": str(index + 1)},
+                env_extra={"JDESK": "1", "JDESK_PANE": nome, "JDESK_WS": str(index + 1),
+                           **desk.ipc.env()},
                 on_title=desk.on_title, key_filter=desk.on_key, on_focus=self.set_active,
             )
 
@@ -226,6 +217,10 @@ class JDesk:
         root.minsize(640, 360)
         root.configure(bg=DEFAULT_BG)
 
+        self.ipc = jipc.Servidor()   # antes dos workspaces: os panes recebem JDESK_SOCK/TOKEN
+        self.ipc.iniciar()
+        self._fechando = False
+
         self.metrics = Metrics()
         self.metrics.start()
         self.bar = StatusBar(root, N_WS, self.switch)
@@ -239,6 +234,7 @@ class JDesk:
         self.bar.start(self.metrics)
         self.switch(0)
         root.protocol("WM_DELETE_WINDOW", self.close)
+        self._poll_ipc()
 
     def all_panes(self):
         return [p for w in self.ws if w for p in w.panes.values()]
@@ -256,6 +252,61 @@ class JDesk:
         w.show()
         self.bar.set_workspaces(i, {k for k, x in enumerate(self.ws) if x})
         self.root.after(60, w.focus_current)
+
+    # ── IPC (mensagens dos programas dos painéis) ─────────────────────────
+    def _poll_ipc(self):
+        """As threads do servidor só enfileiram; tudo que toca na interface roda aqui."""
+        try:
+            while True:
+                msg, conn = self.ipc.fila.get_nowait()
+                self.tratar_ipc(msg, conn)
+        except queue.Empty:
+            pass
+        if not self._fechando:
+            self.root.after(30, self._poll_ipc)
+
+    def ws_da_msg(self, msg):
+        try:
+            i = int(msg.get("ws")) - 1
+        except (TypeError, ValueError):
+            return self.cur
+        return i if 0 <= i < N_WS and self.ws[i] else self.cur
+
+    def focar(self, i, nome):
+        """Foca um pane do workspace i, mas só se ele for o que está na tela."""
+        w = self.ws[i]
+        if i != self.cur or not w or nome not in w.panes:
+            return False
+        if w.maximized and w.maximized != nome:  # o alvo precisa estar visível
+            w.maximized = None
+            w.layout()
+        w.focus_pane(nome)
+        return True
+
+    def tratar_ipc(self, msg, conn):
+        cmd, i = msg.get("cmd"), self.ws_da_msg(msg)
+        ok, erro = False, f"comando desconhecido: {cmd}"
+        try:
+            if cmd == "open":
+                path = msg.get("path")
+                if not isinstance(path, str) or not path:
+                    erro = "sem caminho"
+                else:
+                    ext = os.path.splitext(path)[1].lower()
+                    alvo = msg.get("target") or ("viewer" if ext in VIEWER_EXT else "jcode")
+                    ok = self.ipc.entregar(str(i + 1), alvo, {"cmd": "open", "path": path})
+                    erro = "" if ok else f"{alvo} não está conectado"
+                    if ok and msg.get("focus", True):
+                        self.focar(i, alvo)
+            elif cmd == "focus":
+                ok = self.focar(i, str(msg.get("target")))
+                erro = "" if ok else "pane indisponível"
+            elif cmd == "refresh":
+                self.ipc.difundir("jfiles", {"cmd": "refresh", "path": msg.get("path")})
+                ok, erro = True, ""
+        except Exception as exc:  # um pedido ruim nunca derruba o JDesk
+            erro = repr(exc)
+        self.ipc.responder(conn, ok, erro)
 
     # ── teclado (chamado por cada PtyPane antes de repassar a tecla) ──────
     def on_key(self, pane, e):
@@ -286,6 +337,15 @@ class JDesk:
                 pane.restart()
                 return True
             return False  # painel vivo: Alt+r segue para o programa
+        if k in ("equal", "plus"):  # Alt+= (ou Alt+Shift+=, que já é "plus")
+            em_thread(adjust_volume, +1)
+            return True
+        if k == "minus":
+            em_thread(adjust_volume, -1)
+            return True
+        if k == "m" and not shift:
+            em_thread(toggle_mute)
+            return True
         if k == "q" and shift:
             self.close()
             return True
@@ -301,6 +361,8 @@ class JDesk:
         if vivos and not messagebox.askokcancel(
                 "JDesk", "Fechar o JDesk?\nEstes programas serão encerrados:\n  " + ", ".join(vivos)):
             return
+        self._fechando = True
+        self.ipc.fechar()
         self.pump.stop()
         self.bar.stop()
         self.metrics.stop()

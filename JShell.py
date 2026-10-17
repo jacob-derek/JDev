@@ -15,6 +15,11 @@ from html import escape as esc
 from itertools import islice
 from pathlib import Path
 
+try:  # canal de mensagens do JDesk (opcional)
+    import jipc
+except ImportError:
+    jipc = None
+
 from prompt_toolkit import PromptSession, print_formatted_text, HTML
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import Completer, PathCompleter, WordCompleter
@@ -439,7 +444,7 @@ def listar(alvo=None, detalhes=False, ordem="nome",
     return 0
 
 
-def abrir_jcode(caminho, criar=False):
+def abrir_jcode(caminho, criar=False, aqui=False):
     arquivo = Path(caminho).expanduser()
 
     if not arquivo.is_absolute():
@@ -455,6 +460,11 @@ def abrir_jcode(caminho, criar=False):
 
     if not JCODE.exists():
         return erro(f"JCode não encontrado: {fmt(JCODE)}")
+
+    # Dentro do JDesk, abre no painel do JCode (use --aqui para abrir neste terminal).
+    if not aqui and jipc is not None and jipc.enviar({"cmd": "open", "path": str(arquivo)}):
+        imprimir(f"<secondary>Aberto no JCode do JDesk:</secondary> {fmt(arquivo)}")
+        return 0
 
     try:
         return subprocess.run([sys.executable, str(JCODE), str(arquivo)]).returncode
@@ -1174,8 +1184,10 @@ def cmd_git(args):
 
 @comando("jcode", "arquivo", "Abre um arquivo no JCode", "JShell")
 def cmd_jcode(args):
+    aqui = "--aqui" in args
+    args = [a for a in args if a != "--aqui"]
     if not args:
-        imprimir("<info>Uso:</info> <command>jcode</command> <arg>arquivo</arg>")
+        imprimir("<info>Uso:</info> <command>jcode</command> [--aqui] <arg>arquivo</arg>")
         return 1
 
     if args[0].lower() == "new":
@@ -1191,9 +1203,9 @@ def cmd_jcode(args):
         if caminho.exists():
             return erro(f"Arquivo já existe: {fmt(caminho)}")
 
-        return abrir_jcode(args[1], criar=True)
+        return abrir_jcode(args[1], criar=True, aqui=aqui)
 
-    return abrir_jcode(args[0])
+    return abrir_jcode(args[0], aqui=aqui)
 
 
 # Entrada separada só para aparecer no help (o comando é o mesmo)
