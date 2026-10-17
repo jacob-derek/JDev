@@ -1,0 +1,30 @@
+# JGrab - lista de albuns.  Formato:  Artista | Album | [link da playlist, opcional]
+# Linhas com # sao ignoradas. Se o JGrab nao achar um album sozinho,
+# cole o link da playlist dele na 3a coluna.
+
+# --- Slipknot
+Slipknot | Slipknot
+Slipknot | Iowa
+Slipknot | Vol. 3: (The Subliminal Verses)
+Slipknot | All Hope Is Gone
+
+# --- Pantera
+Pantera | Vulgar Display of Power
+Pantera | Cowboys From Hell
+
+# --- Deftones  (My Own Summer e uma MUSICA do Around the Fur, por isso o album esta aqui)
+Deftones | Adrenaline
+Deftones | Around the Fur
+
+# --- Yun Li (antes Yung Lixo)
+Yun Li | Cybertapes
+Yun Li | Quarentapes
+Yun Li | Validation
+Yun Li | Bittersweet Memories
+Yun Li | 13 Lentes de um Final Feliz
+
+# --- Xavleg (nome inteiro: XAVLEGBMAOFFFASSSSITIMIWOAMNDUTROABCWAPWAEIIPPOHFFFX)
+# Apague a linha do "Gore" ou do "Gore 2.0" se so quiser um dos dois.
+Xavleg | Hippopotomonstrosesquippedaliophobia
+Xavleg | Gore 2.0
+Xavleg | Gore

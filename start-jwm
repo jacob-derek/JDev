@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+if ! command -v startx >/dev/null 2>&1; then
+    echo "JWM: startx não encontrado. Instale Xorg e xinit." >&2
+    exit 1
+fi
+if ! python3 -c 'import Xlib' >/dev/null 2>&1; then
+    echo "JWM: falta python-xlib. Instale python3-xlib com xbps." >&2
+    exit 1
+fi
+
+DISPLAY_ID=:0
+if [ -S /tmp/.X11-unix/X0 ]; then
+    DISPLAY_ID=:1
+fi
+exec startx "$HERE/jwm-session" -- "$DISPLAY_ID" -nolisten tcp

@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+# Disposição física deste setup: HDMI à esquerda, VGA à direita.
+# Só aplica se os dois conectores esperados estiverem ligados.
+if command -v xrandr >/dev/null 2>&1; then
+    if xrandr --query 2>/dev/null | grep -q '^HDMI-1 connected' && \
+       xrandr --query 2>/dev/null | grep -q '^VGA-1 connected'; then
+        xrandr --output HDMI-1 --auto --primary \
+               --output VGA-1 --auto --right-of HDMI-1 || \
+            echo "JWM: não consegui ajustar a posição HDMI/VGA automaticamente." >&2
+    fi
+fi
+
+exec python3 "$HERE/JWM.py" "$@"

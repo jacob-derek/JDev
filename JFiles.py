@@ -4,11 +4,18 @@ import sys
 import shutil
 import datetime
 import os
+import asyncio
+import threading
 
 try:
     from PIL import Image
 except ImportError:
     Image = None
+
+try:  # canal de mensagens do JDesk (opcional)
+    import jipc
+except ImportError:
+    jipc = None
 
 from prompt_toolkit import Application
 from prompt_toolkit.key_binding import KeyBindings
@@ -534,7 +541,14 @@ def entrar(event):
         return
 
     if item.is_file() and not modo_mover:
-        arquivo_para_abrir = item.resolve()
+        alvo = item.resolve()
+        # Dentro do JDesk: manda o arquivo para o painel certo (JCode/visualizador).
+        # Se não houver JDesk ou ninguém atender, cai no comportamento de sempre.
+        if jipc is not None and jipc.enviar({"cmd": "open", "path": str(alvo)}):
+            definir_status(f"✓ Aberto no JDesk: {alvo.name}")
+            event.app.invalidate()
+            return
+        arquivo_para_abrir = alvo
         event.app.exit()
 
 @teclas.add("backspace", filter=navegacao_ativa)
@@ -941,10 +955,54 @@ def comando_para(arquivo: Path):
     return [sys.executable, str(JCODE), str(arquivo)], False
 
 
+# ── Atualização automática ───────────────────────────────────────────────────
+# O mtime da pasta muda quando entra, sai ou é renomeado um arquivo (ex.: download do
+# JClass). Checar isso é quase de graça, então a lista acompanha o disco sem F5.
+refresh_pedido = threading.Event()  # acionado pelo JDesk (mensagem "refresh")
+
+
+def _assinatura_pasta():
+    try:
+        return diretorio_atual.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+async def vigiar_pasta():
+    pasta, assinatura = diretorio_atual, _assinatura_pasta()
+    while True:
+        await asyncio.sleep(0.7)
+        forcar = refresh_pedido.is_set()
+        refresh_pedido.clear()
+        if diretorio_atual != pasta:  # o usuário navegou: a lista já foi atualizada
+            pasta, assinatura = diretorio_atual, _assinatura_pasta()
+            continue
+        atual = _assinatura_pasta()
+        if forcar or atual != assinatura:
+            assinatura = atual
+            atualizar_lista()
+            app.invalidate()
+
+
+def iniciar_vigia():
+    criar = getattr(app, "create_background_task", None)
+    if criar is not None:
+        criar(vigiar_pasta())
+
+
+def _ao_receber(msg):  # thread do jipc: só sinaliza; quem mexe na lista é o laço do app
+    if msg.get("cmd") == "refresh":
+        refresh_pedido.set()
+
+
 if __name__ == "__main__":
+    # Só o painel "jfiles" do JDesk se registra (um JFiles aberto pelo JShell não rouba as mensagens).
+    if jipc is not None and jipc.disponivel() and os.environ.get("JDESK_PANE") == "jfiles":
+        jipc.Receptor("jfiles", _ao_receber).iniciar()
+
     while True:
         atualizar_lista()
-        app.run()
+        app.run(pre_run=iniciar_vigia)
 
         if arquivo_para_abrir is None:
             break
