@@ -4,12 +4,42 @@ HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 # Disposição física deste setup: HDMI à esquerda, VGA à direita.
 # Só aplica se os dois conectores esperados estiverem ligados.
+#
+# O VGA é forçado para 1600x900 (o "--auto" escolhe o modo preferido do EDID, que costuma
+# ser menor). Se o modo não existir na lista do monitor, ele é criado com cvt.
+# Para testar outro valor sem editar o arquivo:  JWM_VGA_MODE=1366x768 ./start-jwm
+VGA_MODE=${JWM_VGA_MODE:-1600x900}
+VGA_RATE=${JWM_VGA_RATE:-60}
+
 if command -v xrandr >/dev/null 2>&1; then
-    if xrandr --query 2>/dev/null | grep -q '^HDMI-1 connected' && \
-       xrandr --query 2>/dev/null | grep -q '^VGA-1 connected'; then
-        xrandr --output HDMI-1 --auto --primary \
-               --output VGA-1 --auto --right-of HDMI-1 || \
-            echo "JWM: não consegui ajustar a posição HDMI/VGA automaticamente." >&2
+    QUERY=$(xrandr --query 2>/dev/null || true)
+    if printf '%s\n' "$QUERY" | grep -q '^HDMI-1 connected' && \
+       printf '%s\n' "$QUERY" | grep -q '^VGA-1 connected'; then
+
+        vga_mode=$VGA_MODE
+        if ! printf '%s\n' "$QUERY" | awk '/^VGA-1 /{f=1;next} /^[^ ]/{f=0} f{print $1}' | grep -qx "$VGA_MODE"; then
+            # Modo ausente: gera a modeline com cvt e registra no VGA-1.
+            w=${VGA_MODE%x*}
+            h=${VGA_MODE#*x}
+            if command -v cvt >/dev/null 2>&1; then
+                # shellcheck disable=SC2046
+                set -- $(cvt "$w" "$h" "$VGA_RATE" 2>/dev/null | sed -n 's/^Modeline "\([^"]*\)" *\(.*\)$/\1 \2/p')
+                if [ "$#" -gt 1 ]; then
+                    name=$1
+                    xrandr --newmode "$@" >/dev/null 2>&1 || true
+                    xrandr --addmode VGA-1 "$name" >/dev/null 2>&1 || true
+                    vga_mode=$name
+                fi
+            fi
+        fi
+
+        if ! xrandr --output HDMI-1 --auto --primary \
+                    --output VGA-1 --mode "$vga_mode" --right-of HDMI-1; then
+            echo "JWM: não consegui usar $vga_mode no VGA-1; voltando ao modo automático." >&2
+            xrandr --output HDMI-1 --auto --primary \
+                   --output VGA-1 --auto --right-of HDMI-1 || \
+                echo "JWM: não consegui ajustar a posição HDMI/VGA automaticamente." >&2
+        fi
     fi
 fi
 

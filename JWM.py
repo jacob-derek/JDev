@@ -95,6 +95,7 @@ class JWM:
         self.workspaces = [Workspace() for _ in range(4)]
         self.current_ws = 0
         self.active: Optional[int] = None
+        self.mru: list[int] = []  # ids por recência de foco (a mais recente por último)
         self.desktop_id: Optional[int] = None
         self.ignored_unmaps: dict[int, int] = {}
         self.running = True
@@ -233,6 +234,16 @@ class JWM:
             index = self.active_monitor
         index = max(0, min(int(index), len(self.monitors) - 1))
         return self.monitors[index]
+
+    def _bar_top(self, monitor_index: int) -> int:
+        """O espaço da barra do JDesk só existe no monitor onde o JDesk (desktop) está: o 0."""
+        return JDESK_BAR if (self.desktop_id is not None and monitor_index == 0) else 0
+
+    def _desktop_box(self) -> tuple[int, int, int, int]:
+        """Retângulo que envolve todos os monitores: (x1, y1, x2, y2)."""
+        ms = self.monitors or [(0, 0, self.width, self.height)]
+        return (min(m[0] for m in ms), min(m[1] for m in ms),
+                max(m[0] + m[2] for m in ms), max(m[1] + m[3] for m in ms))
 
     def _monitor_for_point(self, x: int, y: int) -> int:
         for i, (mx, my, mw, mh) in enumerate(self.monitors):
@@ -394,7 +405,7 @@ class JWM:
             if c.floating:
                 mx, my, mw, mh = self._monitor_rect(c.monitor)
                 gx, gy, gw, gh = c.geom
-                top = JDESK_BAR if self.desktop_id is not None else 0
+                top = self._bar_top(c.monitor)
                 if gx + gw <= mx or gx >= mx + mw or gy + gh <= my + top or gy >= my + mh:
                     gx, gy = mx + (mw - min(gw, mw)) // 2, my + top + (mh - top - min(gh, mh - top)) // 2
                 c.geom = (gx, gy, min(gw, mw), min(gh, max(MIN_H, mh - top)))
@@ -463,7 +474,6 @@ class JWM:
     def arrange(self) -> None:
         self._refresh_size()
         visible = self._visible_clients()
-        top = JDESK_BAR if self.desktop_id is not None else 0
 
         # Cada monitor tem seu próprio layout. O JDesk fica apenas no monitor 0
         # (HDMI à esquerda); janelas comuns são organizadas no monitor onde abriram.
@@ -471,6 +481,7 @@ class JWM:
             group = [c for c in visible if c.monitor == monitor_index]
             tile = [c for c in group if not c.floating and not c.fullscreen]
             full = next((c for c in group if c.fullscreen), None)
+            top = self._bar_top(monitor_index)
             area_y = my + top
             area_h = max(MIN_H, mh - top)
             if full:
@@ -501,27 +512,45 @@ class JWM:
                         remaining_h -= h
                         remaining_weight -= max(0.1, c.weight)
 
-        # Janelas flutuantes e diálogos ficam limitados ao monitor a que pertencem.
+        # Janelas flutuantes podem ocupar qualquer ponto do desktop, inclusive a emenda entre os
+        # monitores. Só garantimos que fiquem inteiras dentro da caixa que une os monitores, que
+        # não cubram a barra do JDesk e que o centro delas caia sobre algum monitor (sem "vazio").
+        bx1, by1, bx2, by2 = self._desktop_box()
+        m0x, _m0y, m0w, _m0h = self._monitor_rect(0)
         for c in visible:
             if c.fullscreen or not c.floating:
                 continue
-            mx, my, mw, mh = self._monitor_rect(c.monitor)
             x, y, w, h = c.geom
-            top_y = my + top
-            w, h = min(mw, max(MIN_W, w)), min(max(MIN_H, mh - top), max(MIN_H, h))
-            x = max(mx, min(x, mx + mw - w))
-            y = max(top_y, min(y, my + mh - h))
+            w = min(bx2 - bx1, max(MIN_W, w))
+            h = min(by2 - by1, max(MIN_H, h))
+            x = max(bx1, min(x, bx2 - w))
+            toca_jdesk = self.desktop_id is not None and x < m0x + m0w and x + w > m0x
+            y = max(by1 + (JDESK_BAR if toca_jdesk else 0), min(y, by2 - h))
+            cx, cy = x + w // 2, y + h // 2
+            mx, my, mw, mh = self._monitor_rect(self._monitor_for_point(cx, cy))
+            if not (mx <= cx < mx + mw and my <= cy < my + mh):  # centro no vazio entre monitores
+                y += min(max(cy, my), my + mh - 1) - cy
+                x += min(max(cx, mx), mx + mw - 1) - cx
             c.geom = (x, y, w, h)
+            c.monitor = self._monitor_for_point(x + w // 2, y + h // 2)
             self._place(c, *c.geom)
 
         for c in visible:
             self._set_border(c)
+
+        # Camadas, de baixo para cima: JDesk < janelas em mosaico < tela cheia < flutuantes.
+        # As flutuantes mantêm a ordem do último foco (a ativa por cima); dar foco a uma janela em
+        # mosaico nunca a coloca por cima de uma flutuante.
         try:
             for c in visible:
-                if c.floating:
+                if not c.floating and not c.fullscreen:
                     c.window.configure(stack_mode=X.Above)
-            if self.active in self.clients and self.clients[self.active].workspace == self.current_ws:
-                self.clients[self.active].window.configure(stack_mode=X.Above)
+            for c in visible:
+                if c.fullscreen:
+                    c.window.configure(stack_mode=X.Above)
+            ordem = {wid: i for i, wid in enumerate(self.mru)}
+            for c in sorted((c for c in visible if c.floating), key=lambda c: ordem.get(c.wid, -1)):
+                c.window.configure(stack_mode=X.Above)
         except error.BadWindow:
             pass
         self._lower_desktop()
@@ -557,6 +586,9 @@ class JWM:
             return
         self.active = wid
         self.active_monitor = c.monitor
+        if wid in self.mru:
+            self.mru.remove(wid)
+        self.mru.append(wid)
         try:
             c.window.map()
             c.window.set_input_focus(X.RevertToPointerRoot, X.CurrentTime)
@@ -683,7 +715,7 @@ class JWM:
         if not c.floating:
             # Retângulo confortável centralizado no monitor da janela ativa.
             mx, my, mw, mh = self._monitor_rect(c.monitor)
-            top = JDESK_BAR if self.desktop_id is not None else 0
+            top = self._bar_top(c.monitor)
             w, h = min(mw, max(MIN_W, mw * 3 // 5)), min(mh - top, max(MIN_H, mh * 2 // 3))
             c.geom = (mx + (mw - w) // 2, my + top + (mh - top - h) // 2, w, h)
             c.floating = True
@@ -803,6 +835,8 @@ class JWM:
             if wid in ws.clients:
                 ws.clients.remove(wid)
         self.ignored_unmaps.pop(wid, None)
+        if wid in self.mru:
+            self.mru.remove(wid)
         if self.active == wid:
             self.active = None
         self._update_client_list()
@@ -874,7 +908,6 @@ class JWM:
         elif direction == "right": x += MOVE_STEP
         elif direction == "up": y -= MOVE_STEP
         elif direction == "down": y += MOVE_STEP
-        top = JDESK_BAR if self.desktop_id is not None else 0
         c.geom = (max(0, min(x, self.width - w)), max(0, min(y, self.height - h)), w, h)
         c.monitor = self._monitor_for_point(c.geom[0] + w // 2, c.geom[1] + h // 2)
         self.active_monitor = c.monitor
