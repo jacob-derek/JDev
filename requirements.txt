@@ -1,5 +1,8 @@
 pyte
 psutil
+pymupdf
+python-pptx
+python-xlib
 # Windows apenas:
 pywinpty; sys_platform == 'win32'
 pycaw; sys_platform == 'win32'
@@ -8,3 +11,7 @@ comtypes; sys_platform == 'win32'
 google-api-python-client
 google-auth-oauthlib
 prompt_toolkit
+pygments
+pyperclip
+pillow
+# Sistema (fora do pip): LibreOffice (soffice) para abrir .pptx/.ppt/.odp no JSlides

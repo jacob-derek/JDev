@@ -1,178 +1,219 @@
 # JDev
 
-> Um ambiente de desenvolvimento em Python, feito para o terminal, reunindo editor, shell e navegador de arquivos.
+> Um ambiente de desenvolvimento em Python feito para o terminal: editor, shell, explorador de arquivos, cliente do Google Classroom, emulador de terminal, um "desktop" de painéis e até um window manager X11, todos integrados.
 
-O **JDev** é um projeto pessoal em desenvolvimento. A ideia é construir um ambiente leve, modular e integrado para programar e trabalhar com arquivos sem sair do terminal.
+O JDev é um projeto pessoal em desenvolvimento ativo. A ideia é ter um ambiente leve, modular e **integrado**, onde cada ferramenta funciona sozinha, mas fica melhor junto das outras.
+
+```
+┌ 1 2 3 4 ─────────────── qui 17 out  14:32 ──────── VOL 65%  RAM 42%  NET ↓1.2M ↑30K  CPU 12% ┐
+│                                          JFILES                                              │
+├──────────────────────┬───────────────────────────────────┬───────────────────────────────────┤
+│ JSHELL               │ JCODE                             │ JCLASS                            │
+└──────────────────────┴───────────────────────────────────┴───────────────────────────────────┘
+```
 
 ## Componentes
 
 | Componente | Descrição |
 |---|---|
-| **JCode** | Editor de código em tela cheia, com destaque de sintaxe e ferramentas para Python. |
-| **JShell** | Shell interativo com comandos próprios e acesso aos utilitários do JDev. |
-| **JFiles** | Navegador de arquivos em TUI, com operações de gerenciamento e preview. |
-| **JDevTodo** | Lista de tarefas em janela Tkinter flutuante para acompanhar o desenvolvimento. |
+| **JCode** | Editor de código em tela cheia, com realce de sintaxe, validação de Python e sumário (outline). |
+| **JShell** | Shell interativo com comandos próprios, autocomplete e integração com os outros programas. |
+| **JFiles** | Navegador de arquivos em TUI, com preview, operações de gerenciamento e atualização automática. |
+| **JClass** | Baixador de materiais do Google Classroom/Drive, organizado por turma. |
+| **JTerm** | Emulador de terminal (Tkinter + `pyte` + PTY) que renderiza os outros programas. |
+| **JDesk** | Janela única com 4 painéis (JFiles, JShell, JCode, JClass) e 4 workspaces, controlada pelo teclado. |
+| **JSlides** | Visualizador de `.pptx`, `.ppt`, `.odp` e `.pdf`, embutido no JDesk (ou avulso). |
+| **JBar** | Barra superior do JDesk: workspaces, hora, volume, RAM, rede e CPU. |
+| **jipc** | Canal de mensagens que permite aos programas conversarem dentro do JDesk. |
+| **JWM** | Window manager X11 minimalista (python-xlib) que usa o JDesk como desktop de fundo. |
+| **JRun** | Executor de comandos simples para o JWM. |
 
-## Funcionalidades
+## Como os programas se conversam
 
-### JCode — editor
+Dentro do JDesk, cada painel roda um programa num pty próprio, e o `jipc` os conecta:
 
-- Interface de terminal em tela cheia, construída com `prompt_toolkit`.
-- Edição de arquivos com salvamento por `Ctrl+S`.
-- Indicador de estado do arquivo: salvo ou modificado.
-- Números de linha e destaque da linha atual.
-- Guias visuais de indentação.
-- Realce de sintaxe por meio do Pygments, selecionado conforme a extensão/nome do arquivo.
-- Validação sintática de Python em tempo real, com indicação de linha, coluna e mensagem do erro.
-- Painel **Outline/Sumário** para arquivos Python, identificando funções, funções assíncronas e classes por meio da AST.
-- Navegação pelo sumário para saltar até uma definição.
-- Indentação com `Tab`.
-- Selecionar tudo, copiar, recortar e colar por atalhos implementados no editor.
-- Interface com tema escuro inspirado no Gruvbox.
-- Suporte a mouse.
+- **Enter num arquivo no JFiles** abre o arquivo no painel do JCode (que fica em modo *idle* esperando).
+- **`jcode arquivo` no JShell** também abre no painel do JCode (`jcode --aqui arquivo` abre no próprio terminal).
+- **Um download concluído no JClass** faz o JFiles reler a pasta na hora.
+- Ao fechar um arquivo no JCode (Ctrl+Q), o foco volta para o JFiles.
 
-### JShell — shell
+Fora do JDesk, tudo continua funcionando de forma independente, cada programa no seu terminal, como sempre.
 
-- Prompt interativo com o diretório atual visível.
-- Autocomplete de comandos conhecidos.
-- Comandos próprios para navegação e gerenciamento de arquivos.
-- Integração para abrir o JCode e o JFiles.
-- Saída colorida e mensagens de erro/sucesso.
-- Expansão de `~` e suporte a caminhos relativos nos comandos de arquivo.
-
-#### Comandos disponíveis
-
-| Comando | Função |
-|---|---|
-| `help` | Exibe a ajuda de comandos. |
-| `exit` | Encerra o JShell. |
-| `clear` | Limpa a tela. |
-| `pwd` | Mostra o diretório atual. |
-| `ls` | Lista pastas e arquivos, com tamanhos. |
-| `cd <pasta>` | Muda o diretório atual. |
-| `mkdir <pasta>` | Cria uma pasta. |
-| `rd <pasta>` | Remove uma pasta vazia. |
-| `touch <arquivo>` | Cria um arquivo vazio. |
-| `ren <origem> <destino>` | Renomeia um arquivo ou pasta. |
-| `cp <origem> <destino>` | Copia arquivo ou pasta. |
-| `mv <origem> <destino>` | Move arquivo ou pasta. |
-| `rm <arquivo>` | Remove um arquivo. |
-| `cat <arquivo>` | Exibe o conteúdo de um arquivo. |
-| `open <arquivo>` | Abre um arquivo com o programa padrão do sistema. |
-| `jcode <arquivo>` | Abre um arquivo no JCode. |
-| `jcode new <arquivo>` | Abre um arquivo novo no JCode para criação. |
-| `jfiles` | Abre o navegador JFiles. |
-
-> Observação: o JShell é um shell com comandos próprios; não é um substituto completo do Bash. Para executar comandos arbitrários do sistema, use o terminal do sistema.
-
-### JFiles — navegador de arquivos
-
-- Interface TUI com navegação por teclado.
-- Pastas listadas antes dos arquivos, em ordem alfabética.
-- Ícones e tamanhos dos arquivos.
-- Preview do conteúdo de arquivos de texto e da lista de conteúdo de pastas.
-- Visualização de informações: caminho, tipo, extensão, tamanho, data de modificação e quantidade de itens em pastas.
-- Criar arquivos e pastas.
-- Renomear, copiar, mover e excluir itens.
-- Confirmação de exclusão.
-- Abertura de arquivos selecionados no JCode.
-- Mensagens de status e tratamento de erros de acesso/permissão.
-- Layout adaptável ao tamanho do terminal e suporte a mouse.
-
-### JDevTodo — lista de tarefas
-
-- Janela desktop feita com Tkinter.
-- Mantém-se acima das outras janelas.
-- Tarefas separadas por áreas do projeto.
-- Checkboxes e contador de tarefas concluídas.
-- Área rolável e botão para limpar as marcações.
-- Tema escuro alinhado à identidade visual do JDev.
+O canal usa um servidor TCP em `127.0.0.1` (porta aleatória) com token por sessão; só os processos iniciados pelo JDesk recebem as credenciais, via variáveis de ambiente.
 
 ## Instalação
 
 ### Requisitos
 
-- Python 3.10 ou superior (versão recomendada; o projeto pode funcionar em versões próximas compatíveis).
-- Terminal com suporte a sequências de controle ANSI.
-- Para a interface de tarefas: Tkinter.
-- Bibliotecas Python usadas pelo projeto:
+- Linux (o JTerm também tem suporte a Windows via `pywinpty`, e o volume a macOS, mas o uso diário é em Linux).
+- Python 3.10 ou superior.
+- Tkinter (no Debian/Ubuntu: `sudo apt install python3-tk`).
+
+### Dependências Python
 
 ```bash
+# núcleo (JCode, JShell, JFiles)
 pip install prompt_toolkit pygments pyperclip
+
+# JTerm / JDesk / JBar
+pip install pyte psutil pymupdf python-pptx
+
+# JClass
+pip install google-api-python-client google-auth-oauthlib
+
+# opcionais
+pip install pillow          # preview de imagens no JFiles
+# LibreOffice (soffice): converte .pptx/.ppt/.odp para o JSlides
 ```
 
-Em algumas distribuições Linux, o Tkinter precisa ser instalado pelo gerenciador de pacotes do sistema. No Debian, por exemplo:
+Para o **JWM** (window manager), é preciso também `python-xlib`, `startx` e Xorg/xinit. No Void Linux: `xbps-query -Rs python3-xlib`.
 
-```bash
-sudo apt install python3-tk
-```
-
-## Como executar
-
-Clone o repositório:
+### Clonar
 
 ```bash
 git clone https://github.com/jacob-derek/JDev.git
 cd JDev
 ```
 
-Inicie o shell:
+## Como executar
 
 ```bash
-python3 JShell.py
+python3 JDesk.py      # o ambiente completo (painéis + workspaces + barra)
+python3 JShell.py     # só o shell
+python3 JFiles.py     # só o navegador de arquivos
+python3 JCode.py caminho/do/arquivo.py
+python3 JTerm.py      # um terminal com o JShell (ou: JTerm.py outro_comando)
 ```
 
-Abra o navegador de arquivos diretamente:
+### JDesk
 
-```bash
-python3 JFiles.py
-```
+A navegação segue o estilo do sway: o `$mod` é o **Alt** (o WM usa o Super), com `hjkl` ou setas. O resto das teclas vai direto ao programa do painel focado.
 
-Abra a lista de tarefas:
+| Atalho | Ação |
+|---|---|
+| `Alt+h/j/k/l` ou `Alt+setas` | foco: esquerda / baixo / cima / direita |
+| `Alt+Shift+h/j/k/l` ou `+setas` | **move** o painel (troca de lugar com o vizinho, sem reiniciar) |
+| `Alt+1..4` | workspace 1 a 4 (ou clique na barra) |
+| `Alt+f` (ou `Alt+z`) | tela cheia do painel / restaurar |
+| `Alt+r` | **modo resize** (indicador na barra): `h`/`l` largura, `k`/`j` altura, `Enter`/`Esc` sai |
+| `Alt+Shift+q` | encerra o programa do painel (`Enter` reinicia) |
+| `Alt+Shift+r` | reinicia o painel |
+| `Alt+Shift+e` | fecha o JDesk (com confirmação) |
+| teclas de mídia | volume, mudo e brilho (`brightnessctl`) |
+| `Alt+=` / `Alt+-` / `Alt+m` | volume +5% / −5% / mudo |
 
-```bash
-python3 JDevTodo.py
-```
+Cada workspace tem seus próprios 4 painéis e é criado só na primeira visita. Dentro de cada painel valem os atalhos do JTerm: `Ctrl+Shift+C/V` (copiar/colar), `Shift+PgUp/PgDn` e roda do mouse (histórico), `Ctrl+roda` (zoom da fonte daquele painel). Na barra, role o mouse sobre `VOL` para mudar o volume e clique para silenciar.
 
-O JCode normalmente é iniciado pelo JShell ou pelo JFiles:
+### JSlides
 
-```bash
-python3 JCode.py caminho/para/arquivo.py
-```
+Abrir um `.pptx`, `.ppt`, `.odp` ou `.pdf` no JFiles (Enter), no JClass ou no JShell abre o visualizador num painel que cobre o workspace. `Esc` ou `q` fecha e devolve o foco. Também roda sozinho: `python3 JSlides.py arquivo.pptx`.
+
+| Tecla | Ação |
+|---|---|
+| `→ ↓ PgDn espaço` / `← ↑ PgUp Backspace` | próximo / anterior (também `h j k l`) |
+| `Home` / `End` | primeiro / último |
+| `g` + número + `Enter` | ir para o slide |
+| `o` | grade de miniaturas (setas, `Enter` escolhe) |
+| `n` | notas do orador (pptx) |
+| `f` | tela limpa |
+| `r` | recarregar |
+
+PDFs abrem direto (PyMuPDF). Os demais formatos são convertidos pelo LibreOffice em segundo plano e guardados em `~/.cache/jdesk/slides` (a segunda abertura é instantânea). Sem LibreOffice ou PyMuPDF, o `.pptx` abre em modo texto (python-pptx).
+
+### JClass
+
+Baixa os materiais e anexos dos avisos de uma turma do Google Classroom, separando por turma em `JClass/downloads/<turma>/`. Documentos nativos do Google são exportados (PDF, XLSX), e há política de conflito de nomes (renomear, ignorar ou substituir).
+
+**Configuração (uma vez):**
+
+1. No [Google Cloud Console](https://console.cloud.google.com/), crie um projeto e ative as APIs do **Classroom** e do **Drive**.
+2. Crie uma credencial OAuth do tipo *aplicativo para computador* e salve o JSON como `JClass/credentials.json`.
+3. Rode o JClass: na primeira vez ele abre o navegador para autorizar e cria o `token.json`.
+
+Os escopos pedidos são somente leitura. **`credentials.json` e `token.json` nunca devem ser commitados** (o `.gitignore` já os ignora).
+
+### JWM
+
+Um window manager X11 minimalista: o JDesk vira o desktop de fundo (sem decoração), e as demais janelas usam layout master/stack, com modo flutuante opcional. O Alt fica reservado ao JDesk; os atalhos do WM usam **Super**:
+
+| Atalho | Ação |
+|---|---|
+| `Super+Enter` | abre um terminal (JTerm) |
+| `Super+D` | abre o JRun (executar comando) |
+| `Super+Q` | fecha a janela ativa |
+| `Super+F` | tela cheia |
+| `Super+Espaço` | alterna flutuante |
+| `Super+Shift+Q` | encerra o JWM |
+
+Para iniciar: `./start-jwm` (de um TTY). Se já houver um X rodando, ele sobe um segundo servidor em `:1`. O log fica em `~/.cache/jwm.log`.
+
+## JCode, JShell e JFiles
+
+### JCode: editor
+
+- Interface em tela cheia (`prompt_toolkit`), tema escuro inspirado no Gruvbox, suporte a mouse.
+- Salvamento com `Ctrl+S`, indicador de arquivo salvo/modificado e aviso se o arquivo mudou no disco.
+- Números de linha, guias de indentação, realce de sintaxe (Pygments) por extensão.
+- Validação sintática de Python em tempo real, com linha, coluna e mensagem.
+- Painel de sumário (outline) para Python, com salto até a definição.
+- Seleção, copiar/recortar/colar e desfazer/refazer.
+- **No JDesk:** modo *idle* — o painel espera arquivos enviados pelo JFiles/JShell/JClass e troca de arquivo sem fechar (se houver alterações não salvas, ele avisa e espera).
+
+### JShell: shell
+
+Prompt com diretório e ramo do git, autocomplete, histórico (`~/.jshell_history`), aliases e `~/.jshellrc`. Comandos próprios para arquivos e texto: `ls`, `cd`, `pwd`, `tree`, `mkdir`, `rd`, `touch`, `ren`, `cp`, `mv`, `rm`, `du`, `df`, `cat`, `head`, `tail`, `wc`, `grep`, `find`, `echo`, `which`, `env`, `export`, `alias`, `history`, `date`, `whoami`, `open`, `git`, além de `jcode`, `jfiles` e `help`. Programas externos funcionam, e linhas com pipes ou redirecionamentos são repassadas ao shell do sistema.
+
+> O JShell não substitui o Bash: é um shell com comandos próprios.
+
+### JFiles: navegador
+
+Navegação por teclado, pastas antes dos arquivos, ícones, tamanhos, preview de texto (e de imagens, com Pillow) e de conteúdo de pastas, informações do item, criar/renomear/copiar/mover/excluir com confirmação, mensagens de erro de permissão e suporte a mouse. A lista **acompanha o disco sozinha** (um arquivo novo aparece sem precisar atualizar).
 
 ## Estrutura do projeto
 
-```text
+```
 JDev/
-├── JCode.py       # Editor de código
-├── JShell.py      # Shell interativo
-├── JFiles.py      # Navegador e gerenciador de arquivos
-├── JDevTodo.py    # Lista de tarefas desktop
-└── README.md
+├── JCode.py  JShell.py  JFiles.py      # ferramentas principais
+├── JTerm.py  JDesk.py  JBar.py         # terminal, desktop de painéis e barra
+├── JSlides.py                          # visualizador de pptx/pdf
+├── jipc.py                             # canal de mensagens entre programas
+├── JWM.py  JRun.py                     # window manager e executor
+├── start-jwm  jwm-session              # inicialização do JWM
+├── JClass/                             # cliente do Google Classroom
+│   ├── JClass.py  classroom_api.py  drive_download.py  testar_classroom.py
+│   ├── credentials.json  token.json    # (locais, fora do git)
+│   └── downloads/                      # (local, fora do git)
+├── tools/                              # utilitários e experimentos
+├── imagens/                            # ícones
+└── docs/                               # anotações
+```
+
+> O núcleo fica **plano na raiz de propósito**: `JWM` procura `JDesk.py`, `JTerm.py` e `JRun.py` ao seu lado, e os módulos se importam entre si.
+
+## Problemas conhecidos
+
+- O JShell dentro do JTerm pode se comportar mal com linhas de comando muito longas (em investigação). Se acontecer, abra o JShell num terminal comum.
+
+## Roadmap
+
+- **`jdesk.toml`:** layout, atalhos e comandos dos painéis configuráveis.
+- Mover painéis entre workspaces e layouts alternativos (como `splith`/`splitv`/`tabbed` do sway).
+- Abas no JCode, busca no editor e no JFiles, execução de código pelo JCode.
+
+## Versões
+
+O desenvolvimento acontece na branch `dev`; a `main` guarda o que está estável, e cada marco recebe uma tag (`v0.x.y`). Para visitar uma versão antiga sem alterar nada:
+
+```bash
+git tag                              # lista as versões
+git switch -c nostalgia v0.3.0       # cria uma branch a partir da tag
+git switch main                      # volta quando quiser
 ```
 
 ## Tecnologias
 
-- Python
-- `prompt_toolkit` — interface interativa de terminal
-- Pygments — realce de sintaxe
-- Python AST — análise estrutural de código Python
-- `pyperclip` — integração com a área de transferência
-- Tkinter / ttk — janela da lista de tarefas
-
-## Em desenvolvimento
-
-Algumas ideias registradas para versões futuras:
-
-- Abas no JCode e terminais secundários.
-- Busca no editor e navegação direta para uma linha.
-- Melhorias no Outline e autocomplete de símbolos.
-- Execução de código diretamente pelo JCode.
-- Autocomplete de caminhos no JShell.
-- Histórico de comandos e informações do sistema.
-- Busca no JFiles e escolha entre abrir ou executar arquivos.
-- Integração mais profunda entre os componentes e configuração/tema compartilhados.
+Python · prompt_toolkit · Pygments · pyte · Tkinter · psutil · python-xlib · Google Classroom/Drive APIs · AST do Python
 
 ## Estado do projeto
 
-O JDev está em desenvolvimento ativo. Recursos, atalhos e compatibilidade podem mudar entre versões.
+Em desenvolvimento ativo. Recursos, atalhos e compatibilidade podem mudar entre versões.
