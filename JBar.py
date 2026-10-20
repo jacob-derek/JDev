@@ -108,6 +108,16 @@ def toggle_mute():
         pass
 
 
+def brilho(delta):
+    """Brilho da tela +5% / -5% (brightnessctl, como no sway antigo). Sem ele, não faz nada."""
+    if shutil.which("brightnessctl"):
+        try:
+            subprocess.run(["brightnessctl", "set", "5%+" if delta > 0 else "5%-"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0, check=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
 def em_thread(fn, *args):
     """Roda fn fora da thread da interface (pactl pode demorar e congelaria o Tk)."""
     threading.Thread(target=fn, args=args, daemon=True).start()
@@ -272,6 +282,9 @@ class StatusBar(tk.Frame):
             lb.bind("<Button-1>", lambda e, i=i: on_select(i))
             self.tabs.append(lb)
 
+        # indicador de modo (estilo "mode resize" do sway): aparece só quando há um modo ativo
+        self.modo_lb = tk.Label(left, text="", bg=YELLOW, fg=DARK, font=self.font_bold, bd=0)
+
         # métricas (direita)
         right = tk.Frame(self, bg=BAR_BG)
         right.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8))
@@ -309,6 +322,13 @@ class StatusBar(tk.Frame):
                 lb.configure(bg=BAR_BG, fg=FG, font=self.font)
             else:
                 lb.configure(bg=BAR_BG, fg=DIM, font=self.font)
+
+    def set_modo(self, texto):
+        if texto:
+            self.modo_lb.configure(text=f" {texto} ")
+            self.modo_lb.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 0))
+        else:
+            self.modo_lb.pack_forget()
 
     def start(self, metrics):
         self.metrics = metrics

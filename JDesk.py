@@ -1,34 +1,39 @@
 #!/usr/bin/env python3
 """
-JDesk - ambiente de terminal com vários painéis (Fases 1-3).
+JDesk - ambiente de terminal com vários painéis (Fases 1-4).
 
   [ workspaces |      hora      | vol · ram · net · cpu ]
   [                    JFILES                    ]
   [ JSHELL ]       [ JCODE ]       [ JCLASS ]
 
-Cada workspace (1-4) tem seus próprios 4 painéis e proporções; é criado só na
-primeira vez que você entra nele (os programas só sobem ali).
+Cada workspace tem seus próprios 4 painéis e proporções; é criado só na primeira vez
+que você entra nele (os programas só sobem ali).
 
-Cada painel é um PtyPane (JTerm.py) com seu próprio pty, rodando um programa do
-ecossistema J. Tudo é controlado pelo teclado com Alt (o resto vai direto ao
-programa do painel focado):
+Navegação no estilo do sway (o $mod aqui é o Alt; o WM usa o Super):
 
-    Alt+1..4                        troca de workspace (ou clique na barra)
-    Alt+h/j/k/l ou Alt+setas        move o foco (esq/baixo/cima/dir)
-    Alt+Shift+h/j/k/l ou +setas     redimensiona o painel focado:
-                                      ↑ / k / → / l  = cresce     ↓ / j / ← / h = diminui
-    Alt+z                           maximiza / restaura o painel focado
-    Alt+r                           reinicia o painel se o processo já terminou
-    Alt+Shift+R                     reinicia o painel mesmo com o processo vivo
-    Alt+= / Alt+-                   volume do sistema +5% / -5%   (Alt+m = mudo)
-    Alt+Shift+Q                     fecha o JDesk
-    Enter (painel finalizado)       reinicia o painel
+    Alt+h/j/k/l ou Alt+setas          foco: esquerda / baixo / cima / direita
+    Alt+Shift+h/j/k/l ou +setas       MOVE o painel (troca de lugar com o vizinho)
+    Alt+1..4                          workspace 1..4 (ou clique na barra)
+    Alt+f  (ou Alt+z)                 tela cheia do painel / restaurar
+    Alt+r                             modo RESIZE (como o "mode resize" do sway):
+                                        h/← diminui largura   l/→ aumenta largura
+                                        k/↑ diminui altura    j/↓ aumenta altura
+                                        Enter ou Esc sai do modo
+    Alt+Shift+q                       mata o programa do painel (Enter reinicia)
+    Alt+Shift+r                       reinicia o painel
+    Alt+Shift+e                       fecha o JDesk (com confirmação)
+
+    Teclas de mídia (sem modificador): volume, mudo e brilho, como no sway.
+    Alt+= / Alt+- / Alt+m             volume +5% / -5% / mudo (para teclados sem teclas de mídia)
+
+Visualizador (JSlides): arquivos .pptx/.ppt/.odp/.pdf pedidos pelo JFiles/JClass/JShell abrem
+num painel que cobre o workspace; Esc ou q fecha e devolve o foco.
 
 Dentro de cada painel valem os atalhos do JTerm (Ctrl+Shift+C/V, Shift+PgUp,
 Ctrl+roda para zoom da fonte DAQUELE painel, etc.).
 
-Dependências: pip install pyte psutil   (+ pywinpty, pycaw no Windows)
-              psutil é opcional (sem ele a barra mostra "--" nas métricas)
+Dependências: pip install pyte psutil pymupdf python-pptx   (+ pywinpty, pycaw no Windows)
+              psutil, pymupdf e python-pptx são opcionais (a barra e o visualizador degradam)
 """
 import os
 import queue
@@ -37,33 +42,52 @@ import tkinter as tk
 from tkinter import messagebox
 
 import jipc
-from JBar import Metrics, StatusBar, adjust_volume, em_thread, toggle_mute
+from JBar import Metrics, StatusBar, adjust_volume, brilho, em_thread, toggle_mute
 from JTerm import (ALT_MASK, BASE_DIR, BORDER_IDLE, DEFAULT_BG, Pump, PtyPane,
                    enable_dpi_awareness)
 
-BOTTOM = ["jshell", "jcode", "jclass"]
-ORDER = ["jfiles", *BOTTOM]
-N_WS = 4
+try:
+    from JSlides import SlidesPane
+except ImportError:  # JSlides.py ausente: os arquivos caem no comportamento antigo
+    SlidesPane = None
+
+ORDER = ["jfiles", "jshell", "jcode", "jclass"]  # ocupação inicial dos slots: 0 = topo, 1..3 = linha de baixo
+N_WS = 4   # quantidade de workspaces (Alt+1..N)
 
 MIN_ROW, MAX_ROW = 0.20, 0.80
 MIN_COL = 0.12
 STEP = 0.04
 
-# Extensões que pertencem a um visualizador (JSlides, Fase 4). Enquanto ele não existir,
-# o "open" falha e o programa de origem cai no comportamento antigo (ex.: zathura/xdg-open).
+# Extensões que abrem no visualizador embutido (JSlides).
 VIEWER_EXT = {".pptx", ".ppt", ".odp", ".pdf"}
 
+# Teclas de mídia: chegam como keysym puro, sem Alt (iguais às do seu config do sway).
+MIDIA = {
+    "XF86AudioRaiseVolume": lambda: em_thread(adjust_volume, +1),
+    "XF86AudioLowerVolume": lambda: em_thread(adjust_volume, -1),
+    "XF86AudioMute": lambda: em_thread(toggle_mute),
+    "XF86MonBrightnessUp": lambda: em_thread(brilho, +1),
+    "XF86MonBrightnessDown": lambda: em_thread(brilho, -1),
+}
+
+DIRS = {"left": "left", "h": "left", "right": "right", "l": "right",
+        "up": "up", "k": "up", "down": "down", "j": "down"}
+# No modo resize o sway usa: h diminui largura, l aumenta, k diminui altura, j aumenta.
+RESIZE = {"h": (-1, 0), "left": (-1, 0), "l": (1, 0), "right": (1, 0),
+          "k": (0, -1), "up": (0, -1), "j": (0, 1), "down": (0, 1)}
+
+
 def achar(nome):
-    """Procura o script em JDev/ e em JDev/<Nome>/ (ex.: JDev/JClass/JClass.py)."""
+    """Procura o script em JDev/<Nome>/ e depois em JDev/ (ex.: JDev/JClass/JClass.py)."""
     stem = os.path.splitext(nome)[0]
-    candidatos = [
-        os.path.join(BASE_DIR, nome),
+    candidatos = [  # a subpasta vem primeiro: JDev/JClass/JClass.py vence um JClass.py solto na raiz
         os.path.join(BASE_DIR, stem, nome),
+        os.path.join(BASE_DIR, nome),
     ]
     for c in candidatos:
         if os.path.isfile(c):
             return c
-    return candidatos[0]  # inexistente: o painel mostra o erro e permite reiniciar
+    return candidatos[1]  # inexistente: o painel mostra o erro e permite reiniciar
 
 
 def programa(nome):
@@ -80,17 +104,24 @@ def comandos():
 
 
 class Workspace:
-    """Um conjunto de 4 painéis com layout próprio (criado sob demanda)."""
+    """Um conjunto de 4 painéis com layout próprio (criado sob demanda).
+
+    O layout é feito de *slots* (0 = linha de cima, 1..3 = linha de baixo). Cada slot guarda o
+    nome de um painel; mover um painel é trocar o conteúdo de dois slots, sem reiniciar nada."""
 
     def __init__(self, desk, index):
         self.desk = desk
         self.index = index
         self.frame = tk.Frame(desk.area, bg=BORDER_IDLE, bd=0, highlightthickness=0)
-        self.row_split = 0.60                  # fração da altura ocupada pelo JFiles
-        self.col_w = [0.30, 0.40, 0.30]        # larguras da linha inferior
+        self.slots = list(ORDER)
+        self.row_split = 0.60                  # fração da altura ocupada pelo slot de cima
+        self.col_w = [0.30, 0.40, 0.30]        # larguras dos 3 slots de baixo
         self.maximized = None
         self.active = None
-        self.last_bottom = "jshell"
+        self.last_slot = 1                     # último slot de baixo focado (para ir "para baixo")
+        self.viewer = None
+        self.viewer_aberto = False
+        self.retorno = "jfiles"
 
         self.panes = {}
         cmds = comandos()
@@ -105,19 +136,24 @@ class Workspace:
     # ── exibição ──
     def show(self):
         self.frame.place(relx=0, rely=0, relwidth=1, relheight=1)
-        self.layout()
+        if not self.viewer_aberto:
+            self.layout()
 
     def hide(self):
         self.frame.place_forget()
         for p in self.panes.values():
             p.set_visible(False)  # segue rodando, só não desenha
 
+    def slot_de(self, nome):
+        return self.slots.index(nome)
+
     def rects(self):
         h = self.row_split
-        r = {"jfiles": (0.0, 0.0, 1.0, h)}
+        r = {self.slots[0]: (0.0, 0.0, 1.0, h)}
         x = 0.0
-        for nome, w in zip(BOTTOM, self.col_w):
-            r[nome] = (x, h, w, 1.0 - h)
+        for s in (1, 2, 3):
+            w = self.col_w[s - 1]
+            r[self.slots[s]] = (x, h, w, 1.0 - h)
             x += w
         return r
 
@@ -149,8 +185,9 @@ class Workspace:
             self.active.set_active(False)
         self.active = pane
         pane.set_active(True)
-        if pane.name in BOTTOM:
-            self.last_bottom = pane.name
+        s = self.slot_de(pane.name)
+        if s > 0:
+            self.last_slot = s
 
     def focus_pane(self, nome):
         pane = self.panes[nome]
@@ -158,47 +195,89 @@ class Workspace:
         pane.focus_text()
 
     def focus_current(self):
-        self.focus_pane(self.active.name if self.active else "jfiles")
+        if self.viewer_aberto and self.viewer is not None:
+            self.viewer.focus_canvas()
+        else:
+            self.focus_pane(self.active.name if self.active else "jfiles")
 
-    def vizinho(self, atual, direcao):
-        if atual == "jfiles":
-            return self.last_bottom if direcao == "down" else None
-        i = BOTTOM.index(atual)
+    def slot_vizinho(self, s, direcao):
+        if s == 0:
+            return self.last_slot if direcao == "down" else None
         if direcao == "up":
-            return "jfiles"
-        if direcao == "left" and i > 0:
-            return BOTTOM[i - 1]
-        if direcao == "right" and i < len(BOTTOM) - 1:
-            return BOTTOM[i + 1]
+            return 0
+        if direcao == "left" and s > 1:
+            return s - 1
+        if direcao == "right" and s < 3:
+            return s + 1
         return None
 
     def mover_foco(self, direcao):
         atual = self.active.name if self.active else "jfiles"
-        alvo = self.vizinho(atual, direcao)
-        if not alvo:
+        alvo = self.slot_vizinho(self.slot_de(atual), direcao)
+        if alvo is None:
             return
         if self.maximized:  # sair do zoom para poder navegar
             self.maximized = None
             self.layout()
-        self.focus_pane(alvo)
+        self.focus_pane(self.slots[alvo])
 
-    # ── redimensionamento ──
-    def redimensionar(self, direcao):
+    def mover(self, direcao):
+        """Alt+Shift+direção: troca o painel focado de lugar com o vizinho (como o 'move' do sway)."""
         if self.maximized or not self.active:
             return
-        nome = self.active.name
-        if direcao in ("up", "down"):
-            d = STEP if direcao == "up" else -STEP          # ↑ = cresce
-            self.row_split += d if nome == "jfiles" else -d
+        s = self.slot_de(self.active.name)
+        t = self.slot_vizinho(s, direcao)
+        if t is None:
+            return
+        self.slots[s], self.slots[t] = self.slots[t], self.slots[s]
+        if t > 0:
+            self.last_slot = t
+        self.layout()
+        self.focus_pane(self.active.name)
+
+    # ── redimensionamento (modo resize) ──
+    def redimensionar(self, largura=0, altura=0):
+        """+1 aumenta, -1 diminui (mesma semântica do 'resize grow/shrink' do sway)."""
+        if self.maximized or not self.active:
+            return
+        s = self.slot_de(self.active.name)
+        if altura:
+            d = STEP * altura
+            self.row_split += d if s == 0 else -d
             self.row_split = max(MIN_ROW, min(MAX_ROW, self.row_split))
-        elif nome != "jfiles":
-            d = STEP if direcao == "right" else -STEP       # → = cresce
-            i = BOTTOM.index(nome)
-            j = i + 1 if i < len(BOTTOM) - 1 else i - 1     # o vizinho absorve a diferença
+        if largura and s > 0:
+            d = STEP * largura
+            i = s - 1
+            j = i + 1 if i < 2 else i - 1     # o vizinho absorve a diferença
             if self.col_w[i] + d >= MIN_COL and self.col_w[j] - d >= MIN_COL:
                 self.col_w[i] += d
                 self.col_w[j] -= d
         self.layout()
+
+    # ── visualizador (JSlides) ──
+    def abrir_viewer(self, caminho, focar=True):
+        if SlidesPane is None:
+            return False
+        if self.viewer is None:
+            self.viewer = SlidesPane(self.frame, on_close=self.fechar_viewer, key_filter=self.desk.on_key)
+        if not self.viewer_aberto:
+            self.retorno = self.active.name if self.active else "jfiles"
+        self.viewer_aberto = True
+        for p in self.panes.values():
+            p.set_visible(False)  # o que está por baixo não precisa desenhar
+        self.viewer.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.viewer.lift()
+        self.viewer.abrir(caminho)
+        if focar:
+            self.viewer.after(30, self.viewer.focus_canvas)
+        return True
+
+    def fechar_viewer(self):
+        if self.viewer is not None:
+            self.viewer.place_forget()
+        self.viewer_aberto = False
+        self.layout()
+        self.focus_pane(self.retorno if self.retorno in self.panes else "jfiles")
 
     # ── encerramento ──
     def vivos(self):
@@ -207,6 +286,11 @@ class Workspace:
     def shutdown(self):
         for p in self.panes.values():
             p.shutdown()
+        if self.viewer is not None:
+            try:
+                self.viewer.destroy()
+            except tk.TclError:
+                pass
 
 
 class JDesk:
@@ -220,6 +304,7 @@ class JDesk:
         self.ipc = jipc.Servidor()   # antes dos workspaces: os panes recebem JDESK_SOCK/TOKEN
         self.ipc.iniciar()
         self._fechando = False
+        self.modo_resize = False
 
         self.metrics = Metrics()
         self.metrics.start()
@@ -243,6 +328,7 @@ class JDesk:
     def switch(self, i):
         if i == self.cur or not (0 <= i < N_WS):
             return
+        self.sair_resize()
         if self.ws[i] is None:
             self.ws[i] = Workspace(self, i)  # só aqui os programas do workspace são iniciados
         if self.cur is not None:
@@ -277,6 +363,8 @@ class JDesk:
         w = self.ws[i]
         if i != self.cur or not w or nome not in w.panes:
             return False
+        if w.viewer_aberto:  # um pedido para um painel fecha o visualizador que cobria tudo
+            w.fechar_viewer()
         if w.maximized and w.maximized != nome:  # o alvo precisa estar visível
             w.maximized = None
             w.layout()
@@ -294,10 +382,15 @@ class JDesk:
                 else:
                     ext = os.path.splitext(path)[1].lower()
                     alvo = msg.get("target") or ("viewer" if ext in VIEWER_EXT else "jcode")
-                    ok = self.ipc.entregar(str(i + 1), alvo, {"cmd": "open", "path": path})
-                    erro = "" if ok else f"{alvo} não está conectado"
-                    if ok and msg.get("focus", True):
-                        self.focar(i, alvo)
+                    if alvo == "viewer":  # o visualizador mora dentro do JDesk: sem socket
+                        w = self.ws[i]
+                        ok = bool(w and w.abrir_viewer(path, focar=msg.get("focus", True)))
+                        erro = "" if ok else "visualizador indisponível (JSlides.py)"
+                    else:
+                        ok = self.ipc.entregar(str(i + 1), alvo, {"cmd": "open", "path": path})
+                        erro = "" if ok else f"{alvo} não está conectado"
+                        if ok and msg.get("focus", True):
+                            self.focar(i, alvo)
             elif cmd == "focus":
                 ok = self.focar(i, str(msg.get("target")))
                 erro = "" if ok else "pane indisponível"
@@ -308,35 +401,48 @@ class JDesk:
             erro = repr(exc)
         self.ipc.responder(conn, ok, erro)
 
-    # ── teclado (chamado por cada PtyPane antes de repassar a tecla) ──────
+    # ── modo resize ───────────────────────────────────────────────────────
+    def entrar_resize(self):
+        self.modo_resize = True
+        self.bar.set_modo("RESIZE  h/l largura · j/k altura · Enter sai")
+
+    def sair_resize(self):
+        if self.modo_resize:
+            self.modo_resize = False
+            self.bar.set_modo("")
+
+    def _tecla_resize(self, e):
+        k = e.keysym.lower()
+        if k in RESIZE:
+            self.ws[self.cur].redimensionar(*RESIZE[k])
+        elif k in ("return", "kp_enter", "escape"):
+            self.sair_resize()
+        return True  # enquanto o modo existe, nenhuma tecla vaza para o programa
+
+    # ── teclado (chamado por cada painel antes de repassar a tecla) ───────
     def on_key(self, pane, e):
+        ks = e.keysym
+        acao = MIDIA.get(ks)
+        if acao:  # teclas de mídia valem em qualquer painel e no visualizador
+            acao()
+            return True
+
+        viewer = getattr(pane, "es_viewer", False)
+        if self.modo_resize and not viewer:
+            return self._tecla_resize(e)
+
         st = e.state
         if not (st & ALT_MASK) or (st & 0x4):  # sem Alt, ou AltGr (Ctrl+Alt): não é nosso
             return False
         shift = bool(st & 0x1)
-        ks = e.keysym
         k = ks.lower()
-        w = self.ws[self.cur]
-        dirs = {"left": "left", "h": "left", "right": "right", "l": "right",
-                "up": "up", "k": "up", "down": "down", "j": "down"}
 
-        if k.isdigit() and not shift and 1 <= int(k) <= N_WS:
-            self.switch(int(k) - 1)
-            return True
-        if k in dirs:
-            if shift:
-                w.redimensionar(dirs[k])
-            else:
-                w.mover_foco(dirs[k])
-            return True
-        if k == "z" and not shift:
-            w.toggle_max(pane)
-            return True
-        if k == "r":
-            if shift or pane.dead:
-                pane.restart()
+        # ── globais (valem também com o visualizador em foco) ──
+        if k.isdigit() and not shift:
+            n = 10 if k == "0" else int(k)
+            if 1 <= n <= N_WS:
+                self.switch(n - 1)
                 return True
-            return False  # painel vivo: Alt+r segue para o programa
         if k in ("equal", "plus"):  # Alt+= (ou Alt+Shift+=, que já é "plus")
             em_thread(adjust_volume, +1)
             return True
@@ -346,8 +452,31 @@ class JDesk:
         if k == "m" and not shift:
             em_thread(toggle_mute)
             return True
-        if k == "q" and shift:
+        if k == "e" and shift:
             self.close()
+            return True
+        if viewer:
+            return False
+
+        # ── específicos de painel ──
+        w = self.ws[self.cur]
+        if k in DIRS:
+            if shift:
+                w.mover(DIRS[k])
+            else:
+                w.mover_foco(DIRS[k])
+            return True
+        if k in ("f", "z") and not shift:
+            w.toggle_max(pane)
+            return True
+        if k == "r":
+            if shift:
+                pane.restart()
+            else:
+                self.entrar_resize()
+            return True
+        if k == "q" and shift:
+            pane.encerrar()
             return True
         return False
 

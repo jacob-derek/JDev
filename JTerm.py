@@ -262,6 +262,12 @@ def enable_dpi_awareness():
             pass
 
 
+def _eh_emoji(c):
+    """Caracteres cuja fonte de fallback costuma ser mais alta que a fonte do terminal."""
+    o = ord(c)
+    return o >= 0x1F000 or 0x2600 <= o <= 0x27BF or 0x2B00 <= o <= 0x2BFF or o == 0xFE0F
+
+
 class PtyPane(tk.Frame):
     """Um terminal completo (pty + pyte + Text) dentro de um Frame.
 
@@ -293,6 +299,9 @@ class PtyPane(tk.Frame):
         self.font_italic.configure(slant="italic")
         self.font_bold_italic = self.font_bold.copy()
         self.font_bold_italic.configure(slant="italic")
+        self.lh_real = 0               # altura real (px) da maior linha com emoji já medida
+        self._medidas_estaveis = 0
+        self._remedir_job = None
         self.update_metrics()
 
         self.header = None
@@ -363,6 +372,7 @@ class PtyPane(tk.Frame):
         env = os.environ.copy()
         env.update({"TERM": "xterm-256color", "COLORTERM": "truecolor",
                     "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"})
+        env.setdefault("JICONES", "nerd")  # aqui emojis (acima de U+FFFF) não são confiáveis no Tk
         env.update(self.env_extra)
 
         q = self.queue = queue.Queue(maxsize=128)   # limite = contrapressão no processo
@@ -406,6 +416,13 @@ class PtyPane(tk.Frame):
             return
         self.kill_process()
         self.start_process()
+
+    def encerrar(self):
+        """Mata o processo e deixa o painel parado, esperando Enter para reiniciar."""
+        if self.destroyed or self.dead or not self.started:
+            return
+        self.kill_process()
+        self.on_process_exit("encerrado")
 
     def shutdown(self):
         if self.destroyed:
@@ -452,7 +469,7 @@ class PtyPane(tk.Frame):
     def calc_size(self):
         w = self.text.winfo_width() - 2 * PAD
         h = self.text.winfo_height() - 2 * PAD
-        return max(5, h // self.lh), max(20, w // self.cw)
+        return max(5, h // max(self.lh, self.lh_real)), max(20, w // self.cw)
 
     def reset_text_lines(self):
         self.text.delete("1.0", "end")
@@ -492,6 +509,8 @@ class PtyPane(tk.Frame):
         for f in (self.font, self.font_bold, self.font_italic, self.font_bold_italic):
             f.configure(size=size)
         self.update_metrics()
+        self.lh_real = 0  # a fonte mudou: a altura real precisa ser medida de novo
+        self._medidas_estaveis = 0
         self.apply_resize(force=True)
 
     def set_title(self, title):
@@ -571,8 +590,11 @@ class PtyPane(tk.Frame):
             msg = f"[processo finalizado com código {code} — pressione Enter para fechar]"
         else:
             self.waiting_restart = True
-            msg = (f"[processo finalizado com código {code if code is not None else '?'} — "
-                   f"Enter reinicia]")
+            if isinstance(code, str):
+                msg = f"[processo {code} — Enter reinicia]"
+            else:
+                msg = (f"[processo finalizado com código {code if code is not None else '?'} — "
+                       f"Enter reinicia]")
         if self.alt_saved is not None:
             self.set_alt_screen(False)
         self.snap_bottom()
@@ -731,6 +753,34 @@ class PtyPane(tk.Frame):
                 args.append(chunk)
                 args.append(self.tag_for(key))
             self.text.insert(f"{y + 1}.0", *args)  # uma única chamada Tcl por linha
+            self._medir_linha(y, runs)
+
+    def _medir_linha(self, y, runs):
+        """O Tk deixa a linha mais alta quando ela tem um glifo de fonte de fallback (emoji).
+        Se o terminal assumisse a altura da fonte base, as últimas linhas ficariam cortadas
+        (e isso varia com o zoom). Medimos a altura real e recalculamos as linhas que cabem."""
+        if not self.visible or self._medidas_estaveis >= 8:
+            return
+        if not any(_eh_emoji(c) for _, t in runs for c in t):
+            return
+        try:
+            info = self.text.dlineinfo(f"{y + 1}.0")
+        except tk.TclError:
+            return
+        if not info:
+            return
+        h, base = info[3], max(self.lh, self.lh_real)
+        if base < h <= base * 2:
+            self.lh_real, self._medidas_estaveis = h, 0
+            if self._remedir_job is None:
+                self._remedir_job = self.after(30, self._reaplicar)
+        else:
+            self._medidas_estaveis += 1
+
+    def _reaplicar(self):
+        self._remedir_job = None
+        if not self.destroyed:
+            self.apply_resize(force=True)
 
     def safe_render(self):
         try:
