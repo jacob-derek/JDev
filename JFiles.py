@@ -17,6 +17,11 @@ try:  # canal de mensagens do JDesk (opcional)
 except ImportError:
     jipc = None
 
+try:  # ícones conforme o terminal (JICONES=nerd|emoji|ascii); sem jicons.py, emojis como sempre
+    from jicons import ARQUIVO, LINK, PASTA, PASTA_ABERTA
+except ImportError:
+    PASTA, PASTA_ABERTA, ARQUIVO, LINK = "📁", "📂", "📄", "🔗"
+
 from prompt_toolkit import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout, HSplit, VSplit, Window
@@ -316,7 +321,7 @@ def gerar_cabecalho():
     return [
         (
             "class:header",
-            " 📂 NAVEGADOR DE ARQUIVOS "
+            f" {PASTA_ABERTA} NAVEGADOR DE ARQUIVOS "
         ),
         (
             "class:path",
@@ -358,7 +363,7 @@ def gerar_corpo():
         except OSError:
             eh_pasta = False
 
-        icone = "📁" if eh_pasta else "📄"
+        icone = PASTA if eh_pasta else ARQUIVO
 
         if not eh_pasta:
             try:
@@ -421,7 +426,7 @@ def gerar_preview():
                 linhas.append(("class:empty", "  Pasta vazia\n"))
             else:
                 for c in conteudo[:20]:
-                    icone = "📁" if c.is_dir() else "📄"
+                    icone = PASTA if c.is_dir() else ARQUIVO
                     linhas.append(("class:item", f"  {icone} {c.name}\n"))
                 if len(conteudo) > 20:
                     linhas.append(("class:empty", f"  ... e mais {len(conteudo)-20} itens\n"))

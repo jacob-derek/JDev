@@ -20,6 +20,11 @@ try:  # canal de mensagens do JDesk (opcional)
 except ImportError:
     jipc = None
 
+try:  # ícones conforme o terminal (JICONES=nerd|emoji|ascii); sem jicons.py, emojis como sempre
+    from jicons import ARQUIVO, LINK, PASTA, PASTA_ABERTA
+except ImportError:
+    PASTA, PASTA_ABERTA, ARQUIVO, LINK = "📁", "📂", "📄", "🔗"
+
 from prompt_toolkit import PromptSession, print_formatted_text, HTML
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 from prompt_toolkit.completion import Completer, PathCompleter, WordCompleter
@@ -421,19 +426,19 @@ def listar(alvo=None, detalhes=False, ordem="nome",
 
         if t == "d":
             n_pastas += 1
-            linhas.append(f"  <command>📁</command> {extra}<info>{nome}/</info>")
+            linhas.append(f"  <command>{PASTA}</command> {extra}<info>{nome}/</info>")
         elif t == "f":
             n_arquivos += 1
             if detalhes:
-                linhas.append(f"  <arg>📄</arg> {extra}<secondary>{nome}</secondary>")
+                linhas.append(f"  <arg>{ARQUIVO}</arg> {extra}<secondary>{nome}</secondary>")
             else:
                 tamanho = formatar_tamanho(st.st_size) if st else "?"
                 linhas.append(
-                    f"  <arg>📄</arg> <secondary>{nome}</secondary> <secondary>[{tamanho}]</secondary>"
+                    f"  <arg>{ARQUIVO}</arg> <secondary>{nome}</secondary> <secondary>[{tamanho}]</secondary>"
                 )
         else:
             n_outros += 1
-            linhas.append(f"  <arg>🔗</arg> {extra}<secondary>{nome}</secondary>")
+            linhas.append(f"  <arg>{LINK}</arg> {extra}<secondary>{nome}</secondary>")
 
     linhas.append("<secondary>" + "─" * 55 + "</secondary>")
     resumo = f"{n_pastas} pasta(s) · {n_arquivos} arquivo(s)"
