@@ -35,6 +35,8 @@ YELLOW = "#e0af68"
 RED = "#f7768e"
 CYAN = "#7dcfff"
 DARK = "#1a1b26"
+LINE = "#292e42"   # divisórias
+HOVER = "#24283b"  # aba sob o mouse
 
 INTERVAL = 1.5  # segundos entre coletas
 VOLUME_STEP = 5  # percentual por movimento do scroll
@@ -255,9 +257,24 @@ def level_color(pct, warn=65, crit=85):
     return GREEN
 
 
+BLOCOS = "▁▂▃▄▅▆▇█"
+
+
+def barra(pct):
+    """Mini gráfico de uma célula (8 níveis)."""
+    if pct is None:
+        return "·"
+    return BLOCOS[max(0, min(7, int(pct / 12.5)))]
+
+
+def pct_txt(v):
+    return "--" if v is None else f"{v:.0f}%"
+
+
 # ── Barra ────────────────────────────────────────────────────────────────────
 class StatusBar(tk.Frame):
-    HEIGHT = 26
+    HEIGHT = 30
+    COMPACT_W = 1100  # abaixo disso (ex.: monitor em pé) some o NET e a data, para não apertar
 
     def __init__(self, parent, n_ws, on_select):
         super().__init__(parent, bg=BAR_BG, height=self.HEIGHT, bd=0, highlightthickness=0)
@@ -271,39 +288,72 @@ class StatusBar(tk.Frame):
         self.font_bold.configure(weight="bold")
         self.metrics = None
         self.job = None
+        self.current = 0
+        self.created = set()
+        self._cache = {}       # label -> (texto, cor): só reconfigura o que mudou
+        self._compact = False
 
         # workspaces (esquerda)
         left = tk.Frame(self, bg=BAR_BG)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(6, 0))
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=(8, 0))
         self.tabs = []
         for i in range(n_ws):
-            lb = tk.Label(left, text=f" {i + 1} ", bg=BAR_BG, fg=DIM, font=self.font, bd=0, cursor="hand2")
-            lb.pack(side=tk.LEFT, fill=tk.Y, padx=1)
+            lb = tk.Label(left, text=str(i + 1), width=3, bg=BAR_BG, fg=DIM, font=self.font_bold,
+                          bd=0, cursor="hand2")
+            lb.pack(side=tk.LEFT, fill=tk.Y, padx=2, pady=4)
             lb.bind("<Button-1>", lambda e, i=i: on_select(i))
+            lb.bind("<Enter>", lambda e, i=i: self._pintar_tab(i, hover=True))
+            lb.bind("<Leave>", lambda e, i=i: self._pintar_tab(i))
             self.tabs.append(lb)
 
         # indicador de modo (estilo "mode resize" do sway): aparece só quando há um modo ativo
         self.modo_lb = tk.Label(left, text="", bg=YELLOW, fg=DARK, font=self.font_bold, bd=0)
 
-        # métricas (direita)
+        # métricas (direita): VOL | RAM | NET | CPU, separadas por filetes
         right = tk.Frame(self, bg=BAR_BG)
-        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8))
-        self.lb = {}
-        for key in ("vol", "ram", "net", "cpu"):
-            lb = tk.Label(right, text="", bg=BAR_BG, fg=DIM, font=self.font, bd=0)
-            lb.pack(side=tk.LEFT, padx=7)
-            self.lb[key] = lb
+        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 10))
+        right.rowconfigure(0, weight=1)
+        self.val = {}
+        self._grupos = {}
+        self._seps = {}
+        for col, (key, nome, n) in enumerate((("vol", "VOL", 1), ("ram", "RAM", 1),
+                                              ("net", "NET", 2), ("cpu", "CPU", 1))):
+            if col:
+                sep = tk.Frame(right, bg=LINE, width=1, bd=0, highlightthickness=0)
+                sep.grid(row=0, column=2 * col - 1, sticky="ns", pady=9)
+                self._seps[key] = sep
+            f = tk.Frame(right, bg=BAR_BG)
+            f.grid(row=0, column=2 * col, sticky="ns", padx=9)
+            nm = tk.Label(f, text=nome, bg=BAR_BG, fg=DIM, font=self.font, bd=0)
+            nm.pack(side=tk.LEFT, pady=4)
+            vals = []
+            for _ in range(n):
+                lb = tk.Label(f, text="", bg=BAR_BG, fg=DIM, font=self.font, bd=0)
+                lb.pack(side=tk.LEFT, padx=(7, 0), pady=4)
+                vals.append(lb)
+            self.val[key] = vals
+            self._grupos[key] = (f, nm, *vals)
 
-        # O scroll só altera o volume quando o ponteiro está sobre VOL.
-        self.lb["vol"].configure(cursor="hand2")
-        self.lb["vol"].bind("<Button-4>", lambda e: self._volume_scroll(+1))
-        self.lb["vol"].bind("<Button-5>", lambda e: self._volume_scroll(-1))
-        self.lb["vol"].bind("<MouseWheel>", self._volume_mousewheel)
-        self.lb["vol"].bind("<Button-1>", lambda e: (em_thread(toggle_mute), "break")[1])  # clique = mudo
+        # O scroll só altera o volume quando o ponteiro está sobre VOL; clique = mudo.
+        for w in self._grupos["vol"]:
+            w.configure(cursor="hand2")
+            w.bind("<Button-4>", lambda e: self._volume_scroll(+1))
+            w.bind("<Button-5>", lambda e: self._volume_scroll(-1))
+            w.bind("<MouseWheel>", self._volume_mousewheel)
+            w.bind("<Button-1>", lambda e: (em_thread(toggle_mute), "break")[1])
 
         # relógio (centro de verdade, independente da largura dos lados)
-        self.clock = tk.Label(self, text="", bg=BAR_BG, fg=FG, font=self.font_bold, bd=0)
+        self.clock = tk.Frame(self, bg=BAR_BG)
         self.clock.place(relx=0.5, rely=0.5, anchor="center")
+        self.clock_data = tk.Label(self.clock, text="", bg=BAR_BG, fg=DIM, font=self.font, bd=0)
+        self.clock_data.grid(row=0, column=0, padx=(0, 9))
+        self.clock_hora = tk.Label(self.clock, text="", bg=BAR_BG, fg=FG, font=self.font_bold, bd=0)
+        self.clock_hora.grid(row=0, column=1)
+
+        # filete que separa a barra da área de trabalho (criado por último para ficar por cima)
+        tk.Frame(self, bg=LINE, height=1, bd=0, highlightthickness=0).place(
+            relx=0, rely=1.0, anchor="sw", relwidth=1)
+        self.bind("<Configure>", self._on_configure)
 
     @staticmethod
     def _family():
@@ -313,20 +363,43 @@ class StatusBar(tk.Frame):
         familias = set(font.families())
         return next((f for f in candidatos if f in familias), "TkFixedFont")
 
+    def _set(self, lb, texto, cor):
+        chave = (texto, cor)
+        if self._cache.get(lb) != chave:
+            self._cache[lb] = chave
+            lb.configure(text=texto, fg=cor)
+
+    def _on_configure(self, e):
+        if e.widget is not self:
+            return
+        compact = e.width < self.COMPACT_W
+        if compact == self._compact:
+            return
+        self._compact = compact
+        for w in (self._grupos["net"][0], self._seps["net"], self.clock_data):
+            w.grid_remove() if compact else w.grid()
+
+    def _pintar_tab(self, i, hover=False):
+        lb = self.tabs[i]
+        if i == self.current:
+            lb.configure(bg=BLUE, fg=DARK)
+        elif hover:
+            lb.configure(bg=HOVER, fg=FG)
+        elif i in self.created:
+            lb.configure(bg=BAR_BG, fg=FG)
+        else:
+            lb.configure(bg=BAR_BG, fg=DIM)
+
     # ── API ──
     def set_workspaces(self, current, created):
-        for i, lb in enumerate(self.tabs):
-            if i == current:
-                lb.configure(bg=BLUE, fg=DARK, font=self.font_bold)
-            elif i in created:
-                lb.configure(bg=BAR_BG, fg=FG, font=self.font)
-            else:
-                lb.configure(bg=BAR_BG, fg=DIM, font=self.font)
+        self.current, self.created = current, set(created)
+        for i in range(len(self.tabs)):
+            self._pintar_tab(i)
 
     def set_modo(self, texto):
         if texto:
             self.modo_lb.configure(text=f" {texto} ")
-            self.modo_lb.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 0))
+            self.modo_lb.pack(side=tk.LEFT, fill=tk.Y, padx=(10, 0), pady=4)
         else:
             self.modo_lb.pack_forget()
 
@@ -354,25 +427,26 @@ class StatusBar(tk.Frame):
     # ── atualização (só lê o snapshot; nada bloqueante aqui) ──
     def refresh(self):
         try:
-            self.clock.configure(text=time.strftime("%a %d %b  %H:%M").lower())
+            data, hora = time.strftime("%a %d %b|%H:%M").lower().split("|")
+            self._set(self.clock_data, data, DIM)
+            self._set(self.clock_hora, hora, FG)
             d = self.metrics.snapshot() if self.metrics else {}
 
             vol, muted = d.get("vol"), d.get("muted")
             if vol is None:
-                self.lb["vol"].configure(text="VOL --", fg=DIM)
+                self._set(self.val["vol"][0], "--", DIM)
             elif muted:
-                self.lb["vol"].configure(text="VOL mudo", fg=RED)
+                self._set(self.val["vol"][0], "mudo", RED)
             else:
-                self.lb["vol"].configure(text=f"VOL {vol}%", fg=CYAN)
+                self._set(self.val["vol"][0], f"{vol}%", CYAN)
 
-            ram, cpu = d.get("ram"), d.get("cpu")
-            self.lb["ram"].configure(text="RAM --" if ram is None else f"RAM {ram:.0f}%",
-                                     fg=level_color(ram))
-            self.lb["cpu"].configure(text="CPU --" if cpu is None else f"CPU {cpu:.0f}%",
-                                     fg=level_color(cpu))
+            for key in ("ram", "cpu"):
+                v = d.get(key)
+                self._set(self.val[key][0], f"{barra(v)} {pct_txt(v):>4}", level_color(v))
+
             down, up = d.get("down"), d.get("up")
-            self.lb["net"].configure(text=f"NET ↓{fmt_rate(down):>5} ↑{fmt_rate(up):>5}",
-                                     fg=FG if down is not None else DIM)
+            self._set(self.val["net"][0], f"↓{fmt_rate(down):>5}", GREEN if down is not None else DIM)
+            self._set(self.val["net"][1], f"↑{fmt_rate(up):>5}", BLUE if up is not None else DIM)
         except tk.TclError:
             return
         self.job = self.after(1000, self.refresh)

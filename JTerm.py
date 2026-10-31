@@ -53,10 +53,14 @@ SELECT_BG = "#33467c"
 PAD = 8
 DEFAULT_KEY = (DEFAULT_FG, DEFAULT_BG, False, False, False, False)
 
+# A paleta ANSI precisa distinguir preto como TEXTO de preto como FUNDO:
+# usar #15161e para os dois tornava texto ANSI preto quase invisível no fundo #1a1b26.
+ANSI_BLACK_FG = "#7b83a8"       # preto ANSI elevado para uma cor legível em texto
+ANSI_BLACK_BG = "#15161e"       # preto real continua escuro quando usado como fundo
 COLOR_NAMES = {
-    "black": "#15161e", "red": "#f7768e", "green": "#9ece6a", "brown": "#e0af68",
+    "black": ANSI_BLACK_BG, "red": "#f7768e", "green": "#9ece6a", "brown": "#e0af68",
     "blue": "#7aa2f7", "magenta": "#bb9af7", "cyan": "#7dcfff", "white": "#a9b1d6",
-    "brightblack": "#565f89", "brightred": "#f7768e", "brightgreen": "#9ece6a",
+    "brightblack": "#7b83a8", "brightred": "#f7768e", "brightgreen": "#9ece6a",
     "brightbrown": "#e0af68", "brightyellow": "#e0af68", "brightblue": "#7aa2f7",
     "brightmagenta": "#bb9af7", "brightcyan": "#7dcfff", "brightwhite": "#c0caf5",
 }
@@ -234,10 +238,13 @@ class TermScreen(pyte.Screen):
 
 
 # ── Painel: um pty + emulador + widget (reutilizável em janela única ou no JDesk) ──
+DESK_BG = "#13141c"        # fundo do JDesk: aparece como o "espaço" entre os painéis
 BORDER_IDLE = "#292e42"
 BORDER_FOCUS = "#7aa2f7"
-HEADER_FG_IDLE = "#565f89"
-HEADER_FG_FOCUS = "#1a1b26"
+HEADER_FG_IDLE = "#6b7394"
+HEADER_FG_FOCUS = "#16161e"
+# cor de cada painel: ponto no cabeçalho (inativo) e borda/cabeçalho (com foco)
+ACCENTS = {"jfiles": "#7aa2f7", "jshell": "#9ece6a", "jcode": "#bb9af7", "jclass": "#e0af68"}
 
 _family_cache = None
 
@@ -292,6 +299,7 @@ class PtyPane(tk.Frame):
         self.key_filter = key_filter
         self.on_focus = on_focus
 
+        self.accent = ACCENTS.get(str(name).lower(), BORDER_FOCUS)
         self.font = font.Font(family=pick_family(), size=font_size)
         self.font_bold = self.font.copy()
         self.font_bold.configure(weight="bold")
@@ -306,9 +314,15 @@ class PtyPane(tk.Frame):
 
         self.header = None
         if header:
-            self.header = tk.Label(self, text=f" {name.upper()} ", bg=BORDER_IDLE, fg=HEADER_FG_IDLE,
-                                   anchor="w", font=("TkDefaultFont", 9, "bold"), bd=0, pady=0)
-            self.header.pack(fill=tk.X)
+            self.header_bar = tk.Frame(self, bg=BORDER_IDLE, bd=0, highlightthickness=0)
+            self.header_bar.pack(fill=tk.X)
+            self.dot = tk.Label(self.header_bar, text=" \u25cf", bg=BORDER_IDLE, fg=self.accent,
+                                font=("TkDefaultFont", 9, "bold"), bd=0, pady=2)
+            self.dot.pack(side=tk.LEFT)
+            self.header = tk.Label(self.header_bar, text=f" {name.upper()} ", bg=BORDER_IDLE,
+                                   fg=HEADER_FG_IDLE, anchor="w", font=("TkDefaultFont", 9, "bold"),
+                                   bd=0, pady=2)
+            self.header.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.text = tk.Text(
             self, bg=DEFAULT_BG, fg=DEFAULT_FG, font=self.font, wrap="none",
@@ -317,7 +331,7 @@ class PtyPane(tk.Frame):
             spacing1=0, spacing2=0, spacing3=0, cursor="xterm", undo=False,
         )
         if header:
-            self.text.pack(fill=tk.BOTH, expand=True, padx=1, pady=(0, 1))
+            self.text.pack(fill=tk.BOTH, expand=True, padx=2, pady=(0, 2))
         else:
             self.text.pack(fill=tk.BOTH, expand=True)
 
@@ -443,9 +457,11 @@ class PtyPane(tk.Frame):
             self.on_focus(self)
 
     def set_active(self, active):
-        bg = BORDER_FOCUS if active else BORDER_IDLE
+        bg = self.accent if active else BORDER_IDLE
         self.configure(bg=bg)
         if self.header:
+            self.header_bar.configure(bg=bg)
+            self.dot.configure(bg=bg, fg=HEADER_FG_FOCUS if active else self.accent)
             self.header.configure(bg=bg, fg=HEADER_FG_FOCUS if active else HEADER_FG_IDLE)
 
     def set_header(self, text):
@@ -652,6 +668,10 @@ class PtyPane(tk.Frame):
     def clear_history(self):
         self.history.clear()
         self.offset = 0
+        # Uma limpeza de scrollback não deve deixar linhas antigas em cache na viewport.
+        self.line_cache.clear()
+        if hasattr(self, "screen"):
+            self.screen.dirty.update(range(self.screen.lines))
 
     def scroll_view(self, delta):
         new = max(0, min(len(self.history), self.offset + delta))
@@ -667,23 +687,32 @@ class PtyPane(tk.Frame):
             self.scroll_view(-self.offset)
 
     # ── renderização ──
-    def color(self, c, default):
-        r = self.color_cache.get((c, default))
+    def color(self, c, default, foreground=False):
+        cache_key = (c, default, foreground)
+        r = self.color_cache.get(cache_key)
         if r is None:
+            hex_value = c[1:] if isinstance(c, str) and c.startswith("#") else c
+            near_black = False
+            if isinstance(hex_value, str) and HEX_RE.fullmatch(hex_value):
+                rgb = int(hex_value, 16)
+                near_black = max((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255) <= 0x25
             if c == "default":
                 r = default
+            elif foreground and (c == "black" or near_black):
+                # ANSI black e truecolor quase preto ficam legíveis como texto.
+                r = ANSI_BLACK_FG
             elif c in COLOR_NAMES:
                 r = COLOR_NAMES[c]
-            elif HEX_RE.fullmatch(c):
-                r = "#" + c
+            elif isinstance(hex_value, str) and HEX_RE.fullmatch(hex_value):
+                r = "#" + hex_value
             else:
                 r = default
-            self.color_cache[(c, default)] = r
+            self.color_cache[cache_key] = r
         return r
 
     def compute_key(self, ch, is_cursor):
-        fg = self.color(ch.fg, DEFAULT_FG)
-        bg = self.color(ch.bg, DEFAULT_BG)
+        fg = self.color(ch.fg, DEFAULT_FG, foreground=True)
+        bg = self.color(ch.bg, DEFAULT_BG, foreground=False)
         if ch.reverse != is_cursor:  # XOR: reverse do app e/ou cursor
             fg, bg = bg, fg
         return (fg, bg, bool(ch.bold), bool(ch.italics),
@@ -798,6 +827,9 @@ class PtyPane(tk.Frame):
         if self.destroyed:
             return
         s = self.screen
+        # Tk apaga o tag nativo "sel" quando uma linha selecionada é redesenhada.
+        # Guardamos os índices e aplicamos a seleção de volta após atualizar as linhas.
+        selection = tuple(self.text.tag_ranges("sel"))
         if len(self.tags) > MAX_TAGS:
             self.flush_tags()
 
@@ -822,6 +854,13 @@ class PtyPane(tk.Frame):
                 if 0 <= y < s.lines:
                     self.draw_runs(y, self.live_runs(y))
 
+        if selection:
+            try:
+                self.text.tag_remove("sel", "1.0", "end")
+                for i in range(0, len(selection), 2):
+                    self.text.tag_add("sel", selection[i], selection[i + 1])
+            except tk.TclError:
+                pass
         if self.text.yview()[0] != 0.0:  # o Text nunca deve rolar sozinho
             self.text.yview_moveto(0)
 

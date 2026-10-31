@@ -1,34 +1,21 @@
-# Segredos / credenciais
-credentials.json
-token.json
-client_secret*.json
-*.pem
-*.key
-.env
-.env.*
-!.env.example
-
-# Conteúdo baixado do Classroom (ajuste para a(s) sua(s) pasta(s) de download)
-Downloads/
-downloads/
-*.pptx
-*.ppt
-*.part
-
-# Python
 __pycache__/
 *.pyc
-.venv/
-venv/
-
-# Cache do JSlides (Fase 4) e lixo de editor
-.jcache/
-.vscode/
-.idea/
-archive/
-backups/
-*.zip
+*.bak
 *.log
+*.zip
+
+# binários compilados
 tools/JShell/jshell
-JClass-bk/
-JClass-bk/
+JClass/teste
+JClass/JClass
+
+# segredos do Google (JClass)
+credentials.json
+client_secret*.json
+token.json
+token.pickle
+.env
+
+# lixo do editor
+*~
+*.swp

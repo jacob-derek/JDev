@@ -43,7 +43,7 @@ from tkinter import messagebox
 
 import jipc
 from JBar import Metrics, StatusBar, adjust_volume, brilho, em_thread, toggle_mute
-from JTerm import (ALT_MASK, BASE_DIR, BORDER_IDLE, DEFAULT_BG, Pump, PtyPane,
+from JTerm import (ALT_MASK, BASE_DIR, BORDER_IDLE, DEFAULT_BG, DESK_BG, Pump, PtyPane,
                    enable_dpi_awareness)
 
 try:
@@ -57,6 +57,10 @@ N_WS = 4   # quantidade de workspaces (Alt+1..N)
 MIN_ROW, MAX_ROW = 0.20, 0.80
 MIN_COL = 0.12
 STEP = 0.04
+
+# Espaço (px) em volta de cada painel: com o fundo escuro do JDesk, vira o "respiro" entre eles.
+GAP_PX = 4
+INSET = dict(x=GAP_PX, y=GAP_PX, width=-2 * GAP_PX, height=-2 * GAP_PX)
 
 # Extensões que abrem no visualizador embutido (JSlides).
 VIEWER_EXT = {".pptx", ".ppt", ".odp", ".pdf"}
@@ -112,7 +116,7 @@ class Workspace:
     def __init__(self, desk, index):
         self.desk = desk
         self.index = index
-        self.frame = tk.Frame(desk.area, bg=BORDER_IDLE, bd=0, highlightthickness=0)
+        self.frame = tk.Frame(desk.area, bg=DESK_BG, bd=0, highlightthickness=0)
         self.slots = list(ORDER)
         self.row_split = 0.60                  # fração da altura ocupada pelo slot de cima
         self.col_w = [0.30, 0.40, 0.30]        # larguras dos 3 slots de baixo
@@ -161,7 +165,7 @@ class Workspace:
         if self.maximized:
             for nome, p in self.panes.items():
                 if nome == self.maximized:
-                    p.place(relx=0, rely=0, relwidth=1, relheight=1)
+                    p.place(relx=0, rely=0, relwidth=1, relheight=1, **INSET)
                     p.set_visible(True)
                 else:
                     p.place_forget()
@@ -169,7 +173,7 @@ class Workspace:
             return
         for nome, (x, y, w, h) in self.rects().items():
             p = self.panes[nome]
-            p.place(relx=x, rely=y, relwidth=w, relheight=h)
+            p.place(relx=x, rely=y, relwidth=w, relheight=h, **INSET)
             p.set_visible(True)
 
     def toggle_max(self, pane):
@@ -299,7 +303,7 @@ class JDesk:
         root.title("JDesk")
         root.geometry("1400x820")
         root.minsize(640, 360)
-        root.configure(bg=DEFAULT_BG)
+        root.configure(bg=DESK_BG)
 
         self.ipc = jipc.Servidor()   # antes dos workspaces: os panes recebem JDESK_SOCK/TOKEN
         self.ipc.iniciar()
@@ -310,7 +314,7 @@ class JDesk:
         self.metrics.start()
         self.bar = StatusBar(root, N_WS, self.switch)
         self.bar.pack(side=tk.TOP, fill=tk.X)
-        self.area = tk.Frame(root, bg=BORDER_IDLE, bd=0, highlightthickness=0)
+        self.area = tk.Frame(root, bg=DESK_BG, bd=0, highlightthickness=0)
         self.area.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         self.ws = [None] * N_WS

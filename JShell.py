@@ -7,8 +7,11 @@ import re
 import shlex
 import shutil
 import stat
+import signal
 import subprocess
 import sys
+import threading
+import time
 from collections import deque
 from datetime import datetime
 from html import escape as esc
@@ -20,18 +23,24 @@ try:  # canal de mensagens do JDesk (opcional)
 except ImportError:
     jipc = None
 
+try:  # motor bash (opcional): sem ele o JShell continua funcionando como antes
+    import jbash
+except ImportError:
+    jbash = None
+
 try:  # ícones conforme o terminal (JICONES=nerd|emoji|ascii); sem jicons.py, emojis como sempre
     from jicons import ARQUIVO, LINK, PASTA, PASTA_ABERTA
 except ImportError:
     PASTA, PASTA_ABERTA, ARQUIVO, LINK = "📁", "📂", "📄", "🔗"
 
 from prompt_toolkit import PromptSession, print_formatted_text, HTML
+from prompt_toolkit.application import get_app_or_none
 from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
-from prompt_toolkit.completion import Completer, PathCompleter, WordCompleter
-from prompt_toolkit.document import Document
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.formatted_text import FormattedText
 from prompt_toolkit.history import FileHistory, InMemoryHistory
-from prompt_toolkit.shortcuts import clear as pt_clear
+from prompt_toolkit.lexers import Lexer
+from prompt_toolkit.shortcuts import CompleteStyle
 from prompt_toolkit.styles import Style
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -43,15 +52,42 @@ RC = Path.home() / ".jshellrc"
 IS_WIN = os.name == "nt"
 
 # Tema elegante, minimalista e de alta legibilidade (Inspiração: Tokyo Night)
+# Tokyo Night: contraste consistente entre prompt, saída, avisos e sugestões.
 estilo_jshell = Style.from_dict({
-    'prompt': '#7dcfff bold',       # Ciano/Azul claro para destaque da entrada
-    'error': '#f7768e',             # Vermelho suave (não agressivo)
-    'success': '#9ece6a',           # Verde suave
-    'info': '#7aa2f7',              # Azul elegante para caminhos/ênfase
-    'secondary': '#565f89',         # Cinza azulado para descrições e apoios
-    'command': '#bb9af7',           # Roxo pastel para comandos reconhecidos
-    'arg': '#e0af68',               # Amarelo pastel para argumentos
-    'auto-suggestion': '#565f89',   # Sugestão do histórico
+    'prompt': '#7dcfff bold',
+    'error': '#f7768e bold',
+    'success': '#9ece6a bold',
+    'info': '#7aa2f7',
+    'secondary': '#737aa2',
+    'command': '#bb9af7 bold',
+    'arg': '#e0af68',
+    'auto-suggestion': '#565f89',
+    # prompt "HUD": pílulas (sem setas) + barra de vida no canto direito
+    'pill.cwd': 'bg:#292e42 #7aa2f7 bold',
+    'pill.git': 'bg:#1f2335 #bb9af7',
+    'pill.gitdirty': 'bg:#1f2335 #e0af68',
+    'pill.err': 'bg:#f7768e #16161e bold',
+    'pill.root': 'bg:#f7768e #16161e bold',
+    'combo.full': 'bg:#9ece6a #16161e bold',
+    'combo.mid': 'bg:#e0af68 #16161e bold',
+    'combo.low': 'bg:#f7768e #16161e bold',
+    'hp.full': '#9ece6a',
+    'hp.mid': '#e0af68',
+    'hp.low': '#f7768e',
+    'hp.empty': '#3b4261',
+    'rprompt': '#565f89',
+    'continuation': '#565f89',
+    # realce enquanto digita
+    'cmd.ok': '#9ece6a bold',
+    'cmd.bad': '#f7768e',
+    'kw': '#bb9af7 bold',
+    'str': '#e0af68',
+    'var': '#7dcfff',
+    'op': '#bb9af7',
+    'flag': '#7aa2f7',
+    'path': 'underline',
+    'comment': '#565f89 italic',
+    'dir': '#7aa2f7 bold',
 })
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -170,7 +206,9 @@ def expandir(args, glob_=True):
 
 
 def limpar_tela():
-    pt_clear()
+    """Limpa a tela e o scrollback no JTerm (CSI 3 J), sem depender de terminfo."""
+    sys.stdout.write("\x1b[3J\x1b[H\x1b[2J")
+    sys.stdout.flush()
 
 
 def formatar_tamanho(tamanho_bytes):
@@ -496,7 +534,7 @@ def abrir_jfiles():
 # ── Navegação ────────────────────────────────────────────────────────────────
 
 @comando("ls", "[-l] [-t] [-S] [-r] [pasta]", "Lista os arquivos (-l detalhes, -t data, -S tamanho, -r inverte)",
-         "Navegação", aliases=("dir",))
+         "Navegação", aliases=("dir", "jls"))
 def cmd_ls(args):
     flags, alvos = parse(args, "ltSr")
     ordem = "tamanho" if "S" in flags else "tempo" if "t" in flags else "nome"
@@ -1252,8 +1290,8 @@ def cmd_help(args):
     linhas.append("  <secondary>• Encadeie com</secondary> <arg>&amp;&amp;</arg> <arg>||</arg> <arg>;</arg>"
                   "<secondary> · curingas</secondary> <arg>*</arg> <arg>?</arg>"
                   "<secondary> · variáveis</secondary> <arg>$HOME</arg>")
-    linhas.append("  <secondary>• Programas externos (python, nano...) e pipes/redirecionamentos"
-                  " (|, &gt;, &lt;) são repassados ao sistema.</secondary>")
+    linhas.append("  <secondary>• Pipes simples (|) e redirecionamentos (&lt;, &gt;, &gt;&gt;) entre programas externos"
+                  " rodam sem iniciar um shell; sintaxe avançada usa o shell POSIX do sistema.</secondary>")
     linhas.append("  <secondary>• Tab completa comandos e caminhos · ↑/↓ navegam no histórico · Ctrl+D sai.</secondary>")
     imprimir("\n".join(linhas))
     return 0
@@ -1301,12 +1339,139 @@ def externo(argv):
 
 
 def shell_externo(linha):
-    """Repassa a linha inteira ao shell do sistema (pipes, redirecionamentos...)."""
+    """Compatibilidade POSIX para sintaxe avançada ainda não implementada no JShell."""
     primeira = linha.split(None, 1)
     if primeira and primeira[0] in ALIASES:
         linha = ALIASES[primeira[0]] + (" " + primeira[1] if len(primeira) > 1 else "")
     sys.stdout.flush()
     codigo = subprocess.run(linha, shell=True).returncode
+    if codigo != 0:
+        imprimir(f"<secondary>[código {codigo}]</secondary>")
+    return codigo
+
+
+def executar_pipeline_nativo(tokens):
+    """Executa pipelines/redirecionamentos simples sem iniciar /bin/sh.
+
+    Suporta comandos externos encadeados por | e redirecionamentos <, > e >>.
+    Retorna None quando a linha precisa do fallback POSIX (sintaxe avançada ou
+    comando interno do JShell), permitindo compatibilidade sem fingir ser Bash.
+    """
+    if not any(t in {"|", ">", ">>", "<"} for t in tokens):
+        return None
+
+    grupos, atual = [], []
+    for token in tokens:
+        if token == "|":
+            if not atual:
+                return None
+            grupos.append(atual)
+            atual = []
+        elif token in {">", ">>", "<"} or token in {";", "&&", "||"}:
+            # Separadores de fluxo já são tratados em executar_linha; redirecionamentos
+            # são mantidos no grupo para serem processados abaixo.
+            atual.append(token)
+        elif eh_operador(token) and token not in {">", ">>", "<"}:
+            return None
+        else:
+            atual.append(token)
+    if not atual:
+        return None
+    grupos.append(atual)
+
+    comandos, redirs = [], []
+    tem_pipe = len(grupos) > 1
+    for grupo in grupos:
+        argv, redirects, i = [], [], 0
+        while i < len(grupo):
+            token = grupo[i]
+            if token in {">", ">>", "<"}:
+                if i + 1 >= len(grupo) or eh_operador(grupo[i + 1]):
+                    return None
+                # shlex separa alguns descritores (ex.: 2>arquivo) em tokens.
+                # Deixa esses casos para o shell compatível em vez de interpretá-los errado.
+                if token in {">", ">>"} and argv and argv[-1] in {"1", "2"}:
+                    return None
+                redirects.append((token, os.path.expandvars(os.path.expanduser(grupo[i + 1]))))
+                i += 2
+                continue
+            if eh_operador(token):
+                return None
+            argv.append(token)
+            i += 1
+        if not argv:
+            return None
+        # Alias vai pelo executor normal. Em pipes, usa-se o utilitário do sistema
+        # (ex.: ls | grep); redirecionar a saída de um comando interno continua no fallback.
+        if argv[0] in ALIASES or (argv[0].lower() in COMANDOS and not tem_pipe):
+            return None
+        exe = shutil.which(os.path.expanduser(os.path.expandvars(argv[0])))
+        if not exe:
+            return None
+        argv[0] = exe
+        argv = [argv[0], *expandir(argv[1:])]
+        comandos.append(argv)
+        redirs.append(redirects)
+
+    # `comando > arquivo | próximo` precisa semântica de descritor específica; delega
+    # esse caso raro em vez de conectar o processo seguinte ao stdin errado.
+    for redirects in redirs[:-1]:
+        if any(op in {">", ">>"} for op, _ in redirects):
+            return None
+
+    processos = []
+    abertos = []
+    anterior = None
+    try:
+        for indice, (argv, redirects) in enumerate(zip(comandos, redirs)):
+            entrada = anterior
+            saida = subprocess.PIPE if indice < len(comandos) - 1 else None
+            # Redirecionamentos explícitos prevalecem sobre stdin/stdout do pipeline,
+            # como nos shells tradicionais.
+            for operador, caminho in redirects:
+                if operador == "<":
+                    if entrada is not None and entrada is not subprocess.DEVNULL:
+                        try:
+                            entrada.close()
+                        except Exception:
+                            pass
+                    f = open(caminho, "rb")
+                    abertos.append(f)
+                    entrada = f
+                elif operador == ">":
+                    f = open(caminho, "wb")
+                    abertos.append(f)
+                    saida = f
+                elif operador == ">>":
+                    f = open(caminho, "ab")
+                    abertos.append(f)
+                    saida = f
+            proc = subprocess.Popen(argv, stdin=entrada, stdout=saida)
+            processos.append(proc)
+            if anterior is not None:
+                try:
+                    anterior.close()
+                except Exception:
+                    pass
+            anterior = proc.stdout if indice < len(comandos) - 1 else None
+        codigos = [p.wait() for p in processos]
+        codigo = codigos[-1] if codigos else 0
+    except (OSError, ValueError) as exc:
+        for proc in processos:
+            if proc.poll() is None:
+                proc.terminate()
+        for proc in processos:
+            try:
+                proc.wait(timeout=1)
+            except Exception:
+                pass
+        return erro(f"Falha no pipeline: {esc(str(exc))}")
+    finally:
+        for f in abertos:
+            try:
+                f.close()
+            except OSError:
+                pass
     if codigo != 0:
         imprimir(f"<secondary>[código {codigo}]</secondary>")
     return codigo
@@ -1352,8 +1517,8 @@ def executar_tokens(tokens):
     return 127
 
 
-def executar_linha(linha):
-    """Executa uma linha (com &&, ||, ;). Retorna o código de saída."""
+def _executar_linha_classica(linha):
+    """Modo sem motor bash (comportamento antigo). Retorna o código de saída."""
     global STATUS
     linha = linha.strip()
     if not linha or linha.startswith("#"):
@@ -1369,9 +1534,12 @@ def executar_linha(linha):
     if not tokens:
         return STATUS
 
-    # Pipes, redirecionamentos e segundo plano: o shell do sistema resolve
+    # Pipes/redirecionamentos comuns são executados diretamente com subprocess.
+    # Sintaxe mais avançada continua compatível via o shell POSIX do sistema.
     if any(eh_operador(t) and t not in SEPARADORES for t in tokens):
-        STATUS = shell_externo(linha)
+        STATUS = executar_pipeline_nativo(tokens)
+        if STATUS is None:
+            STATUS = shell_externo(linha)
         return STATUS
 
     segmentos, atual = [], []
@@ -1395,6 +1563,159 @@ def executar_linha(linha):
     return STATUS
 
 
+# ── motor bash ───────────────────────────────────────────────────────────────
+MOTOR = None  # jbash.Motor quando o bash está disponível
+
+# Comandos do JShell que ficam NA FRENTE do bash (visual próprio). Para tudo o resto, vale o
+# bash de verdade. Um alias/função do usuário com o mesmo nome vence; `\\ls` ou `command ls`
+# forçam o do sistema; `jls` é sempre o bonito.
+NATIVOS_BONITOS = {"ls", "jls", "tree", "du", "df", "help", "clear", "cls", "exit", "quit", "sair",
+                   "history", "jcode", "jfiles", "open", "rank", "hud"}
+RE_META = re.compile(r"[|&;<>(){}$`\\!#\n]")
+RESERVADAS = {"if", "for", "while", "until", "case", "select", "function", "{", "[[", "time", "coproc", "!"}
+RE_PLANA = re.compile(r"[\w@%+=:,./~ -]+")
+
+
+def eh_simples(linha):
+    """Uma linha sem sintaxe de shell: um comando e seus argumentos."""
+    return not RE_META.search(linha)
+
+
+_SIG_PATH = {"t": 0.0, "v": ()}
+_PATH_CACHE = {"sig": None, "nomes": []}
+_WHICH = {}
+
+
+def _assinatura_path():
+    """(dir, mtime) de cada pasta do PATH, relido no máximo 1x por segundo."""
+    agora = time.monotonic()
+    if agora - _SIG_PATH["t"] < 1.0:
+        return _SIG_PATH["v"]
+    partes = []
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        try:
+            partes.append((d, os.stat(d).st_mtime_ns))
+        except OSError:
+            pass
+    _SIG_PATH.update(t=agora, v=tuple(partes))
+    return _SIG_PATH["v"]
+
+
+def executaveis_path():
+    """Nomes executáveis do PATH (cache invalidado quando uma pasta do PATH muda)."""
+    sig = _assinatura_path()
+    if _PATH_CACHE["sig"] != sig:
+        nomes = set()
+        for d, _ in sig:
+            try:
+                with os.scandir(d) as it:
+                    for e in it:
+                        try:
+                            if os.access(e.path, os.X_OK) and not e.is_dir():
+                                nomes.add(e.name)
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+        _PATH_CACHE.update(sig=sig, nomes=sorted(nomes))
+    return _PATH_CACHE["nomes"]
+
+
+def comando_existe(nome):
+    """`nome` é algo que o shell consegue executar? (interno, alias, função, builtin ou PATH)"""
+    if nome in COMANDOS or nome in ALIASES or nome in RESERVADAS:
+        return True
+    if MOTOR is not None and (MOTOR.conhece(nome) or nome in MOTOR.nativos):
+        return True
+    if "/" in nome:
+        caminho = os.path.expanduser(nome)
+        return os.path.isfile(caminho) and os.access(caminho, os.X_OK)
+    chave = (nome, _assinatura_path())
+    achou = _WHICH.get(chave)
+    if achou is None:
+        if len(_WHICH) > 3000:
+            _WHICH.clear()
+        achou = _WHICH[chave] = shutil.which(nome) is not None
+    return achou
+
+
+def _tentar_nativo(linha):
+    """Roda `linha` pelo comando bonito do JShell, se for o caso. None = deixa para o bash."""
+    if "\n" in linha or not eh_simples(linha):
+        return None
+    try:
+        tokens = tokenizar(linha)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    # aliases embutidos do JShell (ll, ..) só valem se o bash não tiver os seus
+    vistos = set()
+    while tokens[0] in ALIASES and tokens[0] not in vistos and not MOTOR.conhece(tokens[0]):
+        vistos.add(tokens[0])
+        try:
+            novo = shlex.split(ALIASES[tokens[0]])
+        except ValueError:
+            return None
+        if not novo:
+            return None
+        tokens = novo + tokens[1:]
+    nome = tokens[0]
+    if nome not in NATIVOS_BONITOS or nome not in COMANDOS or MOTOR.conhece(nome):
+        return None
+    fn, glob_ = COMANDOS[nome]
+    try:
+        return fn(expandir(tokens[1:], glob_)) or 0
+    except SairShell:
+        raise
+    except ErroArgs:
+        return None   # opção que o JShell não conhece (ls -a, ls -h...): o do sistema resolve
+    except Exception as e:
+        return erro(f"Falha inesperada em <command>{esc(nome)}</command>: <secondary>{esc(repr(e))}</secondary>")
+
+
+def _desconhecido(linha):
+    """Comando inexistente: mensagem no estilo do JShell (+ sugestão) em vez do erro seco do bash."""
+    if "\n" in linha or not eh_simples(linha):
+        return None
+    try:
+        tokens = tokenizar(linha)
+    except ValueError:
+        return None
+    if not tokens:
+        return None
+    nome = tokens[0]
+    if re.match(r"\w+=", nome) or any(c in nome for c in "$~`'\"*?[{"):
+        return None
+    if comando_existe(nome):
+        return None
+    imprimir(f"<error>Comando desconhecido:</error> <command>{esc(nome)}</command>")
+    proprios = set(COMANDOS) | set(ALIASES) | set(MOTOR.aliases) | set(MOTOR.funcoes) | MOTOR.nativos
+    sugestao = (difflib.get_close_matches(nome, sorted(proprios), n=1)
+                or difflib.get_close_matches(nome, executaveis_path(), n=1))
+    if sugestao:
+        imprimir(f"<secondary>Você quis dizer</secondary> <command>{esc(sugestao[0])}</command><secondary>?</secondary>")
+    return 127
+
+
+def executar_linha(linha):
+    """Executa uma linha. Com o motor: bash de verdade, com os comandos bonitos do JShell na frente."""
+    global STATUS
+    if MOTOR is None:
+        return _executar_linha_classica(linha)
+    if not linha.strip() or linha.lstrip().startswith("#"):
+        return STATUS
+    st = _tentar_nativo(linha)
+    if st is None:
+        st = _desconhecido(linha)
+    if st is None:
+        st = MOTOR.executar(linha)
+        if st is None:  # motor indisponível: volta ao modo clássico
+            return _executar_linha_classica(linha)
+    STATUS = st
+    return STATUS
+
+
 def executar_comando(comando_):
     """Compatibilidade: retorna False quando o shell deve encerrar."""
     try:
@@ -1405,7 +1726,111 @@ def executar_comando(comando_):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Prompt, completion e laço principal
+#  HUD: combo, vida e rank (osu!) no prompt
+# ══════════════════════════════════════════════════════════════════════════════
+# Cada comando é uma "nota": exit 0 acerta (combo +1, vida sobe); exit 1 é um "100"
+# (grep sem resultado, diff...: não quebra o combo); exit >= 2 é um miss (combo zera, vida cai).
+# Ctrl+C (130) não conta. Sem vida, "respawn" (a vida volta a 100). Desligue: `hud off`.
+HUD = {"hp": 100, "combo": 0, "max": 0, "ok": 0, "cem": 0, "miss": 0, "total": 0,
+       "dur": 0.0, "t0": time.time()}
+META = {"rank", "hud", "help", "clear", "cls", "history", "exit", "quit", "sair"}
+
+
+def hud_ligado():
+    return os.environ.get("JSHELL_HUD", "1") != "0"
+
+
+def hud_registrar(linha, status, dur):
+    h = HUD
+    h["dur"] = dur
+    primeira = linha.split(None, 1)[0] if linha.split() else ""
+    if primeira in META or status == 130:
+        return
+    h["total"] += 1
+    if status == 0:
+        h["ok"] += 1
+        h["combo"] += 1
+        h["max"] = max(h["max"], h["combo"])
+        h["hp"] = min(100, h["hp"] + 2)
+        if h["combo"] and h["combo"] % 50 == 0 and hud_ligado():
+            imprimir_ft([("class:hp.full", f"» {h['combo']}x combo")])
+    elif status == 1:
+        h["cem"] += 1
+        h["hp"] = max(1, h["hp"] - 3)
+    else:
+        h["miss"] += 1
+        h["combo"] = 0
+        h["hp"] = max(0, h["hp"] - 12)
+        if h["hp"] == 0 and hud_ligado():
+            imprimir_ft([("class:hp.low", "// sem vida · respawn")])
+            h["hp"] = 100
+
+
+def hud_precisao():
+    t = HUD["total"]
+    return 100.0 if not t else 100.0 * (HUD["ok"] + HUD["cem"] / 3) / t
+
+
+def hud_rank():
+    t, acc = HUD["total"], hud_precisao()
+    if t < 5:
+        return "--", "secondary"
+    if acc >= 100 and HUD["miss"] == 0 and HUD["cem"] == 0:
+        return "SS", "hp.mid"
+    for corte, letra, cor in ((90, "S", "hp.mid"), (80, "A", "hp.full"), (70, "B", "info"),
+                              (60, "C", "op"), (0, "D", "hp.low")):
+        if acc > corte or (corte == 0):
+            return letra, cor
+    return "D", "hp.low"
+
+
+def fmt_dur(seg):
+    if seg < 1:
+        return f"{seg * 1000:.0f}ms"
+    if seg < 60:
+        return f"{seg:.1f}s"
+    m, s_ = divmod(int(seg), 60)
+    return f"{m}m{s_:02d}s" if m < 60 else f"{m // 60}h{m % 60:02d}m"
+
+
+def hud_resumo():
+    letra, cor = hud_rank()
+    h = HUD
+    imprimir_ft([
+        ("class:secondary", "─── rank "), (f"class:{cor}", letra), ("class:secondary", " ───  "),
+        ("class:info", f"{h['total']} comandos"), ("class:secondary", " · precisão "),
+        ("class:info", f"{hud_precisao():.1f}%"), ("class:secondary", " · combo máx "),
+        ("class:info", str(h["max"])), ("class:secondary", " · "),
+        ("class:success", f"{h['ok']} ok"), ("class:secondary", " "),
+        ("class:arg", f"{h['cem']} meh"), ("class:secondary", " "),
+        ("class:error", f"{h['miss']} miss"), ("class:secondary", " · "),
+        ("class:secondary", fmt_dur(time.time() - h["t0"])),
+    ])
+
+
+@comando("rank", "", "Mostra seu desempenho na sessão (combo, precisão, rank estilo osu!)", "JShell")
+def cmd_rank(args):
+    hud_resumo()
+    return 0
+
+
+@comando("hud", "[on|off]", "Liga/desliga o combo e a barra de vida no prompt", "JShell")
+def cmd_hud(args):
+    if args and args[0] in ("on", "off"):
+        valor = "1" if args[0] == "on" else "0"
+        if MOTOR is not None:
+            MOTOR.executar(f"export JSHELL_HUD={valor}")
+        else:
+            os.environ["JSHELL_HUD"] = valor
+        return ok(f"HUD {'ligado' if valor == '1' else 'desligado'}")
+    imprimir(f"<secondary>HUD:</secondary> <info>{'ligado' if hud_ligado() else 'desligado'}</info> "
+             f"<secondary>· use</secondary> <command>hud</command> <arg>on|off</arg> "
+             f"<secondary>(ou</secondary> <arg>export JSHELL_HUD=0</arg> <secondary>no ~/.jshellrc)</secondary>")
+    return 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Prompt
 # ══════════════════════════════════════════════════════════════════════════════
 
 def ramo_git():
@@ -1424,45 +1849,388 @@ def ramo_git():
     return None
 
 
-def montar_prompt():
+# "sujo?" vem de `git status` numa thread: o prompt nunca espera por ele.
+_GIT = {"chave": None, "sujo": False, "t": 0.0, "rodando": False}
+
+
+def _git_worker(chave, app):
     try:
-        cwd = str(Path.cwd())
+        r = subprocess.run(["git", "status", "--porcelain", "-uno"], cwd=chave[0],
+                           capture_output=True, text=True, timeout=1.5)
+        sujo = r.returncode == 0 and bool(r.stdout.strip())
+    except (OSError, subprocess.SubprocessError):
+        sujo = False
+    mudou = _GIT["chave"] == chave and _GIT["sujo"] != sujo
+    if _GIT["chave"] == chave:
+        _GIT["sujo"] = sujo
+    _GIT["rodando"] = False
+    if mudou and app is not None:
+        try:
+            app.invalidate()
+        except Exception:
+            pass
+
+
+def git_sujo(ramo):
+    try:
+        chave = (os.getcwd(), ramo)
+    except OSError:
+        return False
+    agora = time.monotonic()
+    if chave != _GIT["chave"]:
+        _GIT.update(chave=chave, sujo=False, t=0.0)
+    if agora - _GIT["t"] > 5 and not _GIT["rodando"]:
+        _GIT.update(t=agora, rodando=True)
+        threading.Thread(target=_git_worker, args=(chave, get_app_or_none()), daemon=True).start()
+    return _GIT["sujo"]
+
+
+def garantir_cwd():
+    try:
+        os.getcwd()
     except OSError:
         os.chdir(Path.home())
         imprimir("<error>O diretório atual foi removido.</error> <secondary>Voltando para a home.</secondary>")
-        cwd = str(Path.cwd())
+        if MOTOR is not None:
+            MOTOR.executar(f"cd {shlex.quote(str(Path.home()))}")
 
+
+def cwd_curto():
+    cwd = str(Path.cwd())
     home = str(Path.home())
     if cwd == home:
-        cwd = "~"
-    elif cwd.startswith(home + os.sep):
-        cwd = "~" + cwd[len(home):]
+        return "~"
+    if cwd.startswith(home + os.sep):
+        return "~" + cwd[len(home):]
+    return cwd
 
+
+def _nivel_hp(hp):
+    return "full" if hp > 60 else "mid" if hp > 30 else "low"
+
+
+def montar_prompt():
+    """Uma linha, em "pílulas" (fundo colorido, sem setas): [combo] [pasta] [git] [exit]"""
+    try:
+        cwd = cwd_curto()
+    except OSError:
+        cwd = "?"
+    frags = []
+    if hud_ligado():
+        frags += [(f"class:combo.{_nivel_hp(HUD['hp'])}", f" {HUD['combo']} "), ("", " ")]
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        frags += [("class:pill.root", " root "), ("", " ")]
+    frags.append(("class:pill.cwd", f" {cwd} "))
     ramo = ramo_git()
-    sufixo = f" <command>({esc(ramo)})</command>" if ramo else ""
-    cor = "prompt" if STATUS == 0 else "error"
-    return HTML(f"<info>{esc(cwd)}</info>{sufixo}<{cor}>$</{cor}>")
+    if ramo:
+        sujo = git_sujo(ramo)
+        frags += [("", " "), ("class:pill.gitdirty" if sujo else "class:pill.git", f" {ramo}{'*' if sujo else ''} ")]
+    if STATUS:
+        frags += [("", " "), ("class:pill.err", f" {STATUS} ")]
+    frags.append(("", " "))
+    return FormattedText(frags)
+
+
+def montar_rprompt():
+    if not hud_ligado():
+        return FormattedText([])
+    hp = HUD["hp"]
+    cheios = max(0, min(5, round(hp / 20)))
+    frags = [(f"class:hp.{_nivel_hp(hp)}", "━" * cheios), ("class:hp.empty", "─" * (5 - cheios))]
+    if HUD["dur"] >= 0.3:
+        frags.append(("class:rprompt", f"  {fmt_dur(HUD['dur'])}"))
+    frags.append(("class:rprompt", "  " + time.strftime("%H:%M")))
+    return FormattedText(frags)
+
+
+def montar_continuacao(*_):
+    return FormattedText([("class:continuation", " > ")])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Escaneamento da linha (usado pelo realce e pela completion)
+# ══════════════════════════════════════════════════════════════════════════════
+RE_OP = re.compile(r"\d*(?:&>>?|>>|>&|>\||<<<|<<-?|<&|<>|>|<)|&&|\|\||\|&|\||;;&|;;|;&|;|&|\(|\)")
+FRONTEIRAS = {"|", "||", "|&", "&&", ";", ";;", "&", "(", "then", "do", "else", "elif", "if", "while",
+              "until", "!", "{", "time", "coproc"}
+ENVOLTORIOS = {"sudo", "doas", "nohup", "exec", "command", "builtin", "env", "xargs", "watch", "nice",
+               "strace", "setsid", "time"}
+
+
+def escanear(linha):
+    """Tokens (ini, fim, tipo, texto, aspa_aberta). tipo: 'w' palavra · 'o' operador · 'c' comentário."""
+    toks, i, n = [], 0, len(linha)
+    while i < n:
+        c = linha[i]
+        if c.isspace():
+            i += 1
+            continue
+        if c == "#" and (i == 0 or linha[i - 1].isspace()):
+            toks.append((i, n, "c", linha[i:], None))
+            break
+        m = RE_OP.match(linha, i) if (c in "|&;()<>" or c.isdigit()) else None
+        if m and m.end() > i:
+            toks.append((i, m.end(), "o", m.group(), None))
+            i = m.end()
+            continue
+        j, q = i, None
+        while j < n:
+            ch = linha[j]
+            if q:
+                if ch == q:
+                    q = None
+                elif ch == "\\" and q == '"' and j + 1 < n:
+                    j += 1
+            else:
+                if ch in "'\"":
+                    q = ch
+                elif ch == "\\" and j + 1 < n:
+                    j += 1
+                elif ch.isspace() or ch in "|&;()<>":
+                    break
+            j += 1
+        toks.append((i, j, "w", linha[i:j], q))
+        i = j
+    return toks
+
+
+RE_VAR = re.compile(r"\$(?:\{[^}]*\}?|\w+|[?$!#@*-])")
+
+
+def _estilo_palavra(p, comando):
+    """Fragmentos (estilo, texto) de uma palavra."""
+    if comando:
+        m = re.match(r"(\w+)(=)(.*)$", p, re.S)
+        if m:  # VAR=valor
+            return [("class:var", m.group(1) + "="), ("", m.group(3))]
+        if p in RESERVADAS or p in {"then", "do", "else", "elif", "fi", "done", "esac", "}", "in"}:
+            return [("class:kw", p)]
+        if any(c in p for c in "$`'\"*?[{~") and not p.startswith("~/") and p != "~":
+            return [("", p)]
+        return [("class:cmd.ok" if comando_existe(p) else "class:cmd.bad", p)]
+    if p[:1] in "'\"":
+        return [("class:str", p)]
+    if p.startswith("-") and len(p) > 1:
+        return [("class:flag", p)]
+    if "$" in p:
+        frags, pos = [], 0
+        for m in RE_VAR.finditer(p):
+            if m.start() > pos:
+                frags.append(("", p[pos:m.start()]))
+            frags.append(("class:var", m.group()))
+            pos = m.end()
+        if pos < len(p):
+            frags.append(("", p[pos:]))
+        return frags
+    try:
+        if len(p) < 300 and os.path.exists(os.path.expanduser(p.replace("\\", ""))):
+            return [("class:path", p)]
+    except OSError:
+        pass
+    return [("", p)]
+
+
+def colorir(linha):
+    """Fragmentos coloridos que reproduzem `linha` exatamente (só muda o estilo)."""
+    frags, pos, comando, envolt = [], 0, True, False
+    for ini, fim, tipo, texto, _ in escanear(linha):
+        if ini > pos:
+            frags.append(("", linha[pos:ini]))
+        pos = fim
+        if tipo == "c":
+            frags.append(("class:comment", texto))
+        elif tipo == "o":
+            frags.append(("class:op", texto))
+            if texto in FRONTEIRAS:
+                comando = True
+        else:
+            frags.extend(_estilo_palavra(texto, comando))
+            if comando:
+                comando = texto in FRONTEIRAS or texto in ENVOLTORIOS or re.match(r"\w+=", texto) is not None
+    if pos < len(linha):
+        frags.append(("", linha[pos:]))
+    return frags
+
+
+class JLexer(Lexer):
+    def lex_document(self, document):
+        linhas = document.lines
+
+        def get_line(i):
+            try:
+                return colorir(linhas[i])
+            except Exception:
+                return [("", linhas[i])]
+        return get_line
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Completion (comandos, caminhos, variáveis e as completions programáveis do bash)
+# ══════════════════════════════════════════════════════════════════════════════
+RE_ESCAPAR = re.compile(r"""([\s\\"'`$&|;<>()*?\[\]{}!#])""")
+SO_PASTAS = {"cd", "pushd", "rmdir"}
+
+
+def escapar(nome):
+    return RE_ESCAPAR.sub(r"\\\1", nome)
+
+
+def desescapar(texto):
+    return re.sub(r"\\(.)", r"\1", texto)
+
+
+def completar_caminho(cru, so_pastas=False):
+    """`cru` = palavra como digitada. Devolve [(texto_que_substitui_cru, nome_exibido, é_pasta)]."""
+    aspa = cru[0] if cru[:1] in ("'", '"') else None
+    corpo = cru[1:] if aspa else cru
+    if corpo == "~":
+        return [(("~/" if not aspa else aspa + "~/"), "~/", True)]
+    dir_cru, barra, base_cru = corpo.rpartition("/")
+    prefixo = dir_cru + barra
+    base = base_cru if aspa else desescapar(base_cru)
+    alvo = os.path.expandvars(os.path.expanduser(prefixo if aspa else desescapar(prefixo))) or "."
+    try:
+        with os.scandir(alvo) as it:
+            entradas = [(e.name, _eh_pasta(e)) for e in it]
+    except OSError:
+        return []
+    mostrar_ocultos = base.startswith(".")
+
+    def filtrar(f):
+        return [(n, d) for n, d in entradas
+                if f(n) and (mostrar_ocultos or not n.startswith(".")) and (d or not so_pastas)]
+    achados = filtrar(lambda n: n.startswith(base)) or filtrar(lambda n: n.lower().startswith(base.lower()))
+    achados.sort(key=lambda x: (not x[1], x[0].lower()))
+    saida = []
+    for nome, eh_dir in achados[:500]:
+        corpo_novo = prefixo + (nome if aspa else escapar(nome)) + ("/" if eh_dir else "")
+        saida.append(((aspa or "") + corpo_novo, nome + ("/" if eh_dir else ""), eh_dir))
+    return saida
+
+
+def _eh_pasta(e):
+    try:
+        return e.is_dir()
+    except OSError:
+        return False
+
+
+def palavras_do_comando(texto):
+    """(tokens da palavra atual, cru, índice_palavra, palavras) para o comando em edição.
+    `palavras` são as palavras do comando simples atual (como o COMP_WORDS do bash)."""
+    toks = escanear(texto)
+    termina_em_espaco = texto == "" or texto[-1].isspace()
+    inicio = 0
+    for k, (_, _, tipo, t, _) in enumerate(toks):
+        if tipo == "o" and t in FRONTEIRAS:
+            inicio = k + 1
+        elif tipo == "w" and t in FRONTEIRAS and k < len(toks) - 1 or (tipo == "w" and t in FRONTEIRAS and termina_em_espaco):
+            inicio = k + 1
+    atuais = toks[inicio:]
+    palavras = [t for _, _, tp, t, _ in atuais if tp == "w"]
+    if termina_em_espaco or (atuais and atuais[-1][2] != "w"):
+        cru = ""
+        palavras.append("")
+    else:
+        cru = atuais[-1][3] if atuais else ""
+    ult_op = atuais[-2][3] if (len(atuais) >= 2 and atuais[-2][2] == "o") else (atuais[-1][3] if atuais and atuais[-1][2] == "o" else "")
+    if termina_em_espaco and atuais and atuais[-1][2] == "o":
+        ult_op = atuais[-1][3]
+    return cru, len(palavras) - 1, palavras, ult_op
+
+
+def nomes_de_comando(prefixo):
+    universo = set(COMANDOS) | set(ALIASES) | set(executaveis_path())
+    if MOTOR is not None:
+        universo |= MOTOR.aliases | MOTOR.funcoes | MOTOR.nativos
+    universo |= {"cd", "export", "source", "alias", "unalias", "type", "exec", "eval"}
+    achados = sorted(n for n in universo if n.startswith(prefixo))
+    if not achados and prefixo:
+        baixo = prefixo.lower()
+        achados = sorted(n for n in universo if n.lower().startswith(baixo))
+    return achados[:300]
+
+
+def gerar_completions(texto):
+    """Lógica pura da completion. Devolve (tamanho_da_palavra_substituída, [(texto, exibir, é_pasta)])."""
+    cru, cword, palavras, ult_op = palavras_do_comando(texto)
+    redirecionando = bool(ult_op) and re.fullmatch(r"\d*(?:>>?|<|&>>?|>\|)", ult_op) is not None
+    # atribuições VAR=x no começo não contam como o comando
+    pular = 0
+    while pular < len(palavras) - 1 and re.match(r"\w+=", palavras[pular]):
+        pular += 1
+    posicao_comando = (cword == pular) and not redirecionando
+
+    if cru.startswith("$") and not cru.startswith("${") and not cru.startswith("$("):
+        nome = cru[1:]
+        vars_ = sorted(k for k in os.environ if k.startswith(nome))
+        return len(cru), [("$" + k, "$" + k, False) for k in vars_[:300]]
+
+    if posicao_comando and "/" not in cru and not cru.startswith(("~", ".")):
+        return len(cru), [(n + " ", n, False) for n in nomes_de_comando(cru)]
+
+    if redirecionando or posicao_comando:
+        return len(cru), completar_caminho(cru)
+
+    cmd = palavras[pular] if palavras else ""
+    # 1) completion programável do bash (git, xbps, ssh, systemctl...)
+    if MOTOR is not None and cmd:
+        ultima = cru
+        quebra = max(ultima.rfind("="), ultima.rfind(":")) if ultima[:1] not in ("'", '"') else -1
+        palavras_bash = palavras[pular:]
+        cword_bash = cword - pular
+        cur_bash = ultima
+        if quebra >= 0:
+            cur_bash = ultima[quebra + 1:]
+            palavras_bash = palavras_bash[:-1] + [ultima[:quebra], ultima[quebra], cur_bash]
+            cword_bash += 2
+        opts, cands = MOTOR.completar(texto, palavras_bash, cword_bash)
+        if cands:
+            aspa = cur_bash[:1] in ("'", '"')
+            saida = []
+            for cand in cands[:500]:
+                bruto = cand.rstrip(" ")
+                eh_dir = False
+                if "filenames" in opts:
+                    try:
+                        eh_dir = os.path.isdir(os.path.expanduser(bruto))
+                    except OSError:
+                        pass
+                    shown = bruto + ("/" if eh_dir and not bruto.endswith("/") else "")
+                    corpo = (aspa and cur_bash[0] or "") + (bruto if aspa else escapar(bruto))
+                    corpo += "/" if eh_dir and not bruto.endswith("/") else ""
+                else:
+                    shown = bruto
+                    corpo = bruto
+                if cand.endswith(" "):      # o próprio completion pediu o espaço (git faz isso)
+                    fim = " "
+                else:
+                    fim = "" if ("nospace" in opts or corpo.endswith(("/", "=")) or eh_dir) else " "
+                saida.append((corpo + fim, shown, eh_dir))
+            return len(cur_bash), saida
+    # 2) caminhos (só pastas para cd e afins)
+    return len(cru), completar_caminho(cru, so_pastas=cmd in SO_PASTAS)
 
 
 class JCompleter(Completer):
-    """Comandos na primeira palavra; caminhos nas demais."""
-
-    def __init__(self):
-        self.comandos = WordCompleter(lambda: sorted(set(COMANDOS) | set(ALIASES)), ignore_case=True)
-        self.caminhos = PathCompleter(expanduser=True)
+    """Tab como no bash: completa a parte comum e, na segunda vez, lista as opções."""
 
     def get_completions(self, document, complete_event):
-        texto = document.text_before_cursor
-        if " " not in texto.lstrip():
-            yield from self.comandos.get_completions(document, complete_event)
+        try:
+            tamanho, itens = gerar_completions(document.text_before_cursor)
+        except Exception:
             return
-        ultima = texto.rsplit(" ", 1)[-1]
-        sub = Document(ultima, len(ultima))
-        yield from self.caminhos.get_completions(sub, complete_event)
+        for texto, exibir, eh_dir in itens:
+            estilo = "class:dir" if eh_dir else ""
+            yield Completion(texto, start_position=-tamanho, display=FormattedText([(estilo, exibir)]))
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Laço principal
+# ══════════════════════════════════════════════════════════════════════════════
 
 def carregar_rc():
-    """Executa ~/.jshellrc (um comando por linha; ideal para aliases)."""
+    """Modo clássico: executa ~/.jshellrc linha a linha. Com o motor bash, o próprio bash o lê."""
     try:
         if RC.is_file():
             for linha in RC.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -1474,11 +2242,53 @@ def carregar_rc():
         pass
 
 
+def iniciar_motor():
+    """Sobe o bash escondido. Devolve o Motor ou None (JSHELL_MOTOR=off, sem bash, ou falha)."""
+    if jbash is None or os.environ.get("JSHELL_MOTOR", "").lower() in ("off", "0", "no"):
+        return None
+    # Ctrl+Z pararia o JShell inteiro (não há controle de jobs): ignora, e o bash herda isso.
+    try:
+        signal.signal(signal.SIGTSTP, signal.SIG_IGN)
+    except (AttributeError, ValueError, OSError):
+        pass
+    motor = jbash.Motor()
+    if not motor.iniciar():
+        imprimir(f"<secondary>Motor bash indisponível ({esc(motor.ultimo_erro or 'sem detalhes')}); "
+                 f"usando o modo clássico.</secondary>")
+        return None
+    return motor
+
+
+def ler_comando(sessao):
+    """Lê um comando (várias linhas se a sintaxe pedir: if/for/aspas abertas/here-doc/\\)."""
+    texto = sessao.prompt(montar_prompt, rprompt=montar_rprompt, style=estilo_jshell)
+    if MOTOR is None:
+        return texto
+    primeira = texto.split(None, 1)[0] if texto.split() else ""
+    while texto.strip() and (not RE_PLANA.fullmatch(texto) or primeira in RESERVADAS or texto.endswith("\\")):
+        estado, msg = MOTOR.checar(texto)
+        if estado == "incompleto":
+            texto += "\n" + sessao.prompt(montar_continuacao, style=estilo_jshell, lexer=JLexer(),
+                                          rprompt=None, enable_history_search=False)
+            continue
+        if estado == "erro":
+            linhas = [l for l in msg.splitlines() if l.strip()]
+            detalhe = linhas[0].split(": ", 2)[-1] if linhas else "erro de sintaxe"
+            imprimir(f"<error>Sintaxe:</error> <secondary>{esc(detalhe)}</secondary>")
+            return ""
+        break
+    return texto
+
+
 def main():
-    global SESSAO, STATUS
+    global SESSAO, STATUS, MOTOR
 
     imprimir("<prompt>JShell</prompt>")
-    imprimir("<secondary>Digite '</secondary><command>help</command><secondary>' para ver os comandos.</secondary>\n")
+    MOTOR = iniciar_motor()
+    if MOTOR is not None:
+        imprimir("<command>help</command><secondary>' mostra os comandos do JShell</secondary>\n")
+    else:
+        imprimir("<secondary>Digite '</secondary><command>help</command><secondary>' para ver os comandos.</secondary>\n")
 
     try:
         historico = FileHistory(str(HISTORICO)) if os.access(Path.home(), os.W_OK) else InMemoryHistory()
@@ -1489,32 +2299,49 @@ def main():
         completer=JCompleter(),
         history=historico,
         auto_suggest=AutoSuggestFromHistory(),
+        lexer=JLexer(),
+        complete_style=CompleteStyle.READLINE_LIKE,
+        complete_while_typing=False,
         complete_in_thread=True,
         enable_history_search=True,
     )
 
-    carregar_rc()
-    STATUS = 0
+    if MOTOR is None:
+        carregar_rc()
+    STATUS = MOTOR.status if MOTOR is not None else 0
+    HUD["t0"] = time.time()
 
-    while True:
-        try:
-            comando_ = SESSAO.prompt(montar_prompt(), style=estilo_jshell)
-        except KeyboardInterrupt:
-            continue          # Ctrl+C só cancela a linha atual
-        except EOFError:
-            print()
-            break             # Ctrl+D sai
+    try:
+        while True:
+            garantir_cwd()
+            try:
+                comando_ = ler_comando(SESSAO)
+            except KeyboardInterrupt:
+                continue          # Ctrl+C só cancela a linha atual
+            except EOFError:
+                print()
+                break             # Ctrl+D sai
 
-        try:
-            executar_linha(comando_)
-        except SairShell:
-            break
-        except KeyboardInterrupt:
-            print("^C")
-            STATUS = 130
-        except Exception as e:
-            imprimir(f"<error>Erro inesperado:</error> <secondary>{esc(repr(e))}</secondary>")
-            STATUS = 1
+            if not comando_.strip():
+                continue
+            inicio = time.monotonic()
+            try:
+                executar_linha(comando_)
+            except SairShell:
+                break
+            except KeyboardInterrupt:
+                print("^C")
+                STATUS = 130
+            except Exception as e:
+                imprimir(f"<error>Erro inesperado:</error> <secondary>{esc(repr(e))}</secondary>")
+                STATUS = 1
+            hud_registrar(comando_, STATUS, time.monotonic() - inicio)
+            _GIT["t"] = 0.0       # o próximo prompt reconfere o git
+    finally:
+        if HUD["total"] >= 3 and hud_ligado():
+            hud_resumo()
+        if MOTOR is not None:
+            MOTOR.fechar()
 
 
 if __name__ == "__main__":

@@ -1,0 +1,165 @@
+#!/bin/sh
+# jwm-layout - disposição dos monitores + wallpaper.
+#
+# Chamado pelo jwm-session ao iniciar e pelo próprio JWM quando um monitor é ligado/desligado.
+# Funciona com qualquer combinação: só HDMI, só VGA, os dois, ou outras saídas (eDP, DP...).
+#
+#   HDMI à esquerda (primário, onde mora o JDesk), VGA à direita.
+#   Sem HDMI, o VGA vira o primário.
+#
+# Ajustes sem editar o arquivo:
+#   JWM_VGA_MODE=1366x768  JWM_VGA_RATE=60  JWM_VGA_ROTATE=normal|right|left|inverted
+#   JWM_WALLPAPER=/caminho/imagem.jpg
+# Tudo que acontece vai para ~/.cache/jwm-session.log
+set -u
+
+LOG=${XDG_CACHE_HOME:-$HOME/.cache}/jwm-session.log
+mkdir -p "$(dirname -- "$LOG")" 2>/dev/null || true
+logar() { printf '%s %s\n' "$(date '+%F %T')" "layout: $*" >> "$LOG" 2>/dev/null || true; }
+tentar() {
+    if "$@" 2>>"$LOG"; then
+        logar "ok: $*"
+    else
+        st=$?
+        logar "FALHOU ($st): $*"
+        return "$st"
+    fi
+}
+
+VGA_MODE=${JWM_VGA_MODE:-1600x900}
+VGA_RATE=${JWM_VGA_RATE:-60}
+VGA_ROTATE=${JWM_VGA_ROTATE:-right}   # "right" deixa o monitor em pé (900x1600)
+
+if ! command -v xrandr >/dev/null 2>&1; then
+    logar "xrandr não encontrado; nada a fazer"
+    exit 0
+fi
+
+QUERY=$(xrandr --query 2>/dev/null || true)
+CONECTADAS=$(printf '%s\n' "$QUERY" | awk '$2=="connected"{print $1}')
+DESCONECTADAS=$(printf '%s\n' "$QUERY" | awk '$2=="disconnected"{print $1}')
+logar "conectadas: $(printf '%s' "$CONECTADAS" | tr '\n' ' ')| desconectadas: $(printf '%s' "$DESCONECTADAS" | tr '\n' ' ')"
+
+# ── Escolhe quem é o primário e a ordem (esquerda -> direita) ────────────────
+PRIM=$(printf '%s\n' "$CONECTADAS" | grep -m1 '^HDMI' || true)
+[ -n "$PRIM" ] || PRIM=$(printf '%s\n' "$CONECTADAS" | head -n 1)
+VGA=$(printf '%s\n' "$CONECTADAS" | grep -m1 '^VGA' || true)
+
+ORDEM=""
+if [ -n "$PRIM" ]; then
+    ORDEM=$PRIM
+    for o in $CONECTADAS; do
+        [ "$o" = "$PRIM" ] || ORDEM="$ORDEM $o"
+    done
+fi
+
+# ── Modo do VGA: o do EDID se existir, senão cria com cvt ────────────────────
+# Importante: nada aqui mexe nos parâmetros posicionais do script (um "set --" solto no
+# jwm-session antigo trocava os argumentos que iam para o JWM e derrubava a sessão).
+modo_vga_para() {
+    saida=$1
+    if printf '%s\n' "$QUERY" | awk -v o="$saida" '$1==o{f=1;next} /^[^ ]/{f=0} f{print $1}' \
+            | grep -qx "$VGA_MODE"; then
+        printf '%s\n' "$VGA_MODE"
+        return 0
+    fi
+    linha=""
+    if command -v cvt >/dev/null 2>&1; then
+        w=${VGA_MODE%x*}
+        h=${VGA_MODE#*x}
+        linha=$(cvt "$w" "$h" "$VGA_RATE" 2>/dev/null \
+                | sed -n 's/^Modeline "\([^"]*\)" *\(.*\)$/\1 \2/p')
+    fi
+    if [ -n "$linha" ]; then
+        nome=${linha%% *}
+        params=${linha#* }
+        # shellcheck disable=SC2086
+        xrandr --newmode "$nome" $params >/dev/null 2>&1 || true
+        xrandr --addmode "$saida" "$nome" >/dev/null 2>&1 || true
+        printf '%s\n' "$nome"
+        return 0
+    fi
+    printf '\n'   # sem modo: o chamador usa --auto
+}
+
+# aplicar custom|auto  -> monta e roda um único xrandr com todas as saídas conectadas
+aplicar() {
+    tipo=$1
+    set --
+    anterior=""
+    for o in $ORDEM; do
+        case $o in
+            VGA*)
+                modo=""
+                [ "$tipo" = custom ] && modo=$(modo_vga_para "$o")
+                if [ -n "$modo" ]; then
+                    set -- "$@" --output "$o" --mode "$modo" --rotate "$VGA_ROTATE"
+                else
+                    set -- "$@" --output "$o" --auto --rotate "$VGA_ROTATE"
+                fi
+                ;;
+            *)
+                set -- "$@" --output "$o" --auto --rotate normal
+                ;;
+        esac
+        [ "$o" = "$PRIM" ] && set -- "$@" --primary
+        [ -n "$anterior" ] && set -- "$@" --right-of "$anterior"
+        anterior=$o
+    done
+    tentar xrandr "$@"
+}
+
+if [ -n "$ORDEM" ]; then
+    # Saídas sem monitor são desligadas (uma por vez: se uma falhar, as outras seguem).
+    for o in $DESCONECTADAS; do
+        xrandr --output "$o" --off >/dev/null 2>&1 || true
+    done
+    if ! aplicar custom; then
+        logar "modo personalizado falhou; tentando o modo automático"
+        aplicar auto || logar "não consegui ajustar os monitores automaticamente"
+    fi
+else
+    logar "nenhuma saída conectada segundo o xrandr; deixando o X como está"
+fi
+
+# ── Wallpaper ────────────────────────────────────────────────────────────────
+# Fica na raiz do X (não é janela). O JDesk cobre o monitor primário, então na prática
+# o wallpaper aparece nos outros monitores.
+# Imagem: JWM_WALLPAPER, senão a primeira de ~/.config/jdev/wallpaper.{png,jpg,jpeg,webp}
+# e depois qualquer imagem dessa pasta. Ferramentas: xwallpaper, feh, hsetroot.
+WP=${JWM_WALLPAPER:-}
+case "$WP" in "~/"*) WP=$HOME/${WP#"~/"} ;; esac   # "~" entre aspas não é expandido pelo shell
+DIR_WP=${XDG_CONFIG_HOME:-$HOME/.config}/jdev
+if [ -z "$WP" ]; then
+    for base in wallpaper "*"; do
+        for ext in png jpg jpeg webp PNG JPG JPEG WEBP; do
+            for cand in "$DIR_WP"/$base.$ext; do
+                if [ -f "$cand" ]; then
+                    WP=$cand
+                    break 3
+                fi
+            done
+        done
+    done
+fi
+if [ -z "$WP" ]; then
+    logar "wallpaper: nenhuma imagem (procurei em $DIR_WP)"
+elif [ ! -f "$WP" ]; then
+    logar "wallpaper: arquivo não existe: $WP"
+else
+    logar "wallpaper: usando $WP"
+    if command -v xwallpaper >/dev/null 2>&1; then
+        if [ -n "$VGA" ]; then
+            tentar xwallpaper --output "$VGA" --zoom "$WP" || tentar xwallpaper --zoom "$WP" || true
+        else
+            tentar xwallpaper --zoom "$WP" || true
+        fi
+    elif command -v feh >/dev/null 2>&1; then
+        tentar feh --no-fehbg --bg-fill "$WP" || true
+    elif command -v hsetroot >/dev/null 2>&1; then
+        tentar hsetroot -fill "$WP" || true
+    else
+        logar "wallpaper: falta xwallpaper/feh/hsetroot (sudo xbps-install -S xwallpaper)"
+    fi
+fi
+exit 0
