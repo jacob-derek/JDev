@@ -55,6 +55,50 @@ from prompt_toolkit.styles import Style
 from pygments.lexers import get_lexer_for_filename
 from pygments.util import ClassNotFound
 
+# Paleta: usa o jtheme.py se estiver na mesma pasta; senão, o Tokyo Night embutido abaixo.
+try:
+    import jtheme
+    _ESTILO = jtheme.estilo_jcode()
+    _ESTILO_IDLE = jtheme.estilo_jcode_idle()
+except (ImportError, AttributeError):
+    jtheme = None
+    _ESTILO = {
+        "": "#c0caf5 bg:#1a1b26",
+        "background": "bg:#1a1b26",
+        "header": "#c0caf5 bold bg:#292e42",
+        "status": "#c0caf5 bg:#292e42",
+        "status.error": "#f7768e bold bg:#292e42",
+        "line-number": "#444b6a",
+        "line-number.current": "#7aa2f7 bold",
+        "line-number.separator": "#3b4261",
+        "indent-guide": "#3b4261",
+        "pygments.keyword": "#bb9af7",
+        "pygments.string": "#9ece6a",
+        "pygments.comment": "#636da6",
+        "pygments.number": "#ff9e64",
+        "pygments.name": "#9aa5ce",
+        "pygments.name.function": "#7aa2f7",
+        "pygments.name.namespace": "#7dcfff",
+        "pygments.operator": "#89ddff",
+        "pygments.decorator": "#e0af68",
+        "pygments.name.decorator": "#e0af68",
+        "outline": "bg:#16161e",
+        "outline.header": "#7aa2f7 bold",
+        "outline.selected": "#e0af68 bold bg:#292e42",
+        "outline.item": "#c0caf5",
+        "outline.empty": "#636da6",
+        "completion-menu": "bg:#292e42 #c0caf5",
+        "completion-menu.completion": "bg:#292e42 #c0caf5",
+        "completion-menu.completion.current": "bg:#7aa2f7 #1a1b26 bold",
+        "completion-menu.meta.completion": "bg:#292e42 #636da6",
+    }
+    _ESTILO_IDLE = {
+        "": "bg:#1a1b26 #c0caf5",
+        "titulo": "#7aa2f7 bold",
+        "texto": "#c0caf5",
+        "dim": "#636da6",
+    }
+
 try:  # canal de mensagens do JDesk (opcional: sem ele o JCode funciona como sempre)
     import jipc
 except ImportError:
@@ -1259,36 +1303,7 @@ def editar(arg_caminho: str) -> None:
         ],
     )
 
-    estilo = Style.from_dict({
-        "": "#c0caf5 bg:#1a1b26",
-        "background": "bg:#1a1b26",
-        "header": "#c0caf5 bold bg:#292e42",
-        "status": "#c0caf5 bg:#292e42",
-        "status.error": "#f7768e bold bg:#292e42",
-        "line-number": "#444b6a",
-        "line-number.current": "#7aa2f7 bold",
-        "line-number.separator": "#3b4261",
-        "indent-guide": "#3b4261",
-        "pygments.keyword": "#bb9af7",
-        "pygments.string": "#9ece6a",
-        "pygments.comment": "#636da6",
-        "pygments.number": "#ff9e64",
-        "pygments.name": "#9aa5ce",
-        "pygments.name.function": "#7aa2f7",
-        "pygments.name.namespace": "#7dcfff",
-        "pygments.operator": "#89ddff",
-        "pygments.decorator": "#e0af68",
-        "pygments.name.decorator": "#e0af68",
-        "outline": "bg:#16161e",
-        "outline.header": "#7aa2f7 bold",
-        "outline.selected": "#e0af68 bold bg:#292e42",
-        "outline.item": "#c0caf5",
-        "outline.empty": "#636da6",
-        "completion-menu": "bg:#292e42 #c0caf5",
-        "completion-menu.completion": "bg:#292e42 #c0caf5",
-        "completion-menu.completion.current": "bg:#7aa2f7 #1a1b26 bold",
-        "completion-menu.meta.completion": "bg:#292e42 #636da6",
-    })
+    estilo = Style.from_dict(_ESTILO)   # tema: jtheme.py se existir; senão o embutido
 
     app = Application(
         layout=Layout(layout_completions, focused_element=editor),
@@ -1485,12 +1500,7 @@ def tela_idle(ultimo: Optional[str]) -> Optional[str]:
         layout=Layout(HSplit([corpo], align=VerticalAlign.CENTER)),
         key_bindings=kb,
         full_screen=True,
-        style=Style.from_dict({
-            "": "bg:#1a1b26 #c0caf5",
-            "titulo": "#7aa2f7 bold",
-            "texto": "#c0caf5",
-            "dim": "#636da6",
-        }),
+        style=Style.from_dict(_ESTILO_IDLE),
     )
 
     def pre_run() -> None:

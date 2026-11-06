@@ -1,21 +1,23 @@
+# Python
 __pycache__/
 *.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Lixo de editor e backups
 *.bak
+*.tmp
+*~
+*.swp
+
+# Logs e pacotes que não são código
 *.log
 *.zip
 
-# binários compilados
-tools/JShell/jshell
-JClass/teste
-JClass/JClass
-
-# segredos do Google (JClass)
+# Segredos do Google (JClass): NUNCA versionar
 credentials.json
 client_secret*.json
 token.json
 token.pickle
 .env
-
-# lixo do editor
-*~
-*.swp

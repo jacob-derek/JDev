@@ -43,51 +43,58 @@ from prompt_toolkit.lexers import Lexer
 from prompt_toolkit.shortcuts import CompleteStyle
 from prompt_toolkit.styles import Style
 
+try:
+    import jtheme  # paleta compartilhada do JDev (opcional: sem ele vale o Tokyo Night embutido)
+except ImportError:
+    jtheme = None
+
 BASE_DIR = Path(__file__).resolve().parent
 JCODE = BASE_DIR / "JCode.py"
 JFILES = BASE_DIR / "JFiles.py"
-JCLASS = BASE_DIR / "JClass" / "JClass.py"
+JCLASS = next((c for c in (BASE_DIR / "tools" / "JClass" / "JClass.py", BASE_DIR / "JClass" / "JClass.py")
+               if c.is_file()), BASE_DIR / "tools" / "JClass" / "JClass.py")
 HISTORICO = Path.home() / ".jshell_history"
 RC = Path.home() / ".jshellrc"
 IS_WIN = os.name == "nt"
 
-# Tema elegante, minimalista e de alta legibilidade (Inspiração: Tokyo Night)
-# Tokyo Night: contraste consistente entre prompt, saída, avisos e sugestões.
-estilo_jshell = Style.from_dict({
-    'prompt': '#7dcfff bold',
-    'error': '#f7768e bold',
-    'success': '#9ece6a bold',
-    'info': '#7aa2f7',
-    'secondary': '#737aa2',
-    'command': '#bb9af7 bold',
-    'arg': '#e0af68',
-    'auto-suggestion': '#565f89',
-    # prompt "HUD": pílulas (sem setas) + barra de vida no canto direito
-    'pill.cwd': 'bg:#292e42 #7aa2f7 bold',
-    'pill.git': 'bg:#1f2335 #bb9af7',
-    'pill.gitdirty': 'bg:#1f2335 #e0af68',
-    'pill.err': 'bg:#f7768e #16161e bold',
-    'pill.root': 'bg:#f7768e #16161e bold',
-    'combo.full': 'bg:#9ece6a #16161e bold',
-    'combo.mid': 'bg:#e0af68 #16161e bold',
-    'combo.low': 'bg:#f7768e #16161e bold',
-    'hp.full': '#9ece6a',
-    'hp.mid': '#e0af68',
-    'hp.low': '#f7768e',
-    'hp.empty': '#3b4261',
-    'rprompt': '#565f89',
-    'continuation': '#565f89',
-    # realce enquanto digita
-    'cmd.ok': '#9ece6a bold',
-    'cmd.bad': '#f7768e',
-    'kw': '#bb9af7 bold',
-    'str': '#e0af68',
-    'var': '#7dcfff',
-    'op': '#bb9af7',
-    'flag': '#7aa2f7',
-    'path': 'underline',
-    'comment': '#565f89 italic',
-    'dir': '#7aa2f7 bold',
+# Tema elegante, minimalista e de alta legibilidade. Com o jtheme.py ao lado, segue o tema escolhido
+# (python3 jtheme.py set <nome>); sem ele, vale o Tokyo Night abaixo (contraste consistente em tudo).
+_tema = getattr(jtheme, "estilo_jshell", None)   # paleta do jtheme.py, se existir ao lado
+estilo_jshell = Style.from_dict(_tema() if _tema else {
+        'prompt': '#7dcfff bold',
+        'error': '#f7768e bold',
+        'success': '#9ece6a bold',
+        'info': '#7aa2f7',
+        'secondary': '#737aa2',
+        'command': '#bb9af7 bold',
+        'arg': '#e0af68',
+        'auto-suggestion': '#565f89',
+        # prompt "HUD": pílulas (sem setas) + barra de vida no canto direito
+        'pill.cwd': 'bg:#292e42 #7aa2f7 bold',
+        'pill.git': 'bg:#1f2335 #bb9af7',
+        'pill.gitdirty': 'bg:#1f2335 #e0af68',
+        'pill.err': 'bg:#f7768e #16161e bold',
+        'pill.root': 'bg:#f7768e #16161e bold',
+        'combo.full': 'bg:#9ece6a #16161e bold',
+        'combo.mid': 'bg:#e0af68 #16161e bold',
+        'combo.low': 'bg:#f7768e #16161e bold',
+        'hp.full': '#9ece6a',
+        'hp.mid': '#e0af68',
+        'hp.low': '#f7768e',
+        'hp.empty': '#3b4261',
+        'rprompt': '#565f89',
+        'continuation': '#565f89',
+        # realce enquanto digita
+        'cmd.ok': '#9ece6a bold',
+        'cmd.bad': '#f7768e',
+        'kw': '#bb9af7 bold',
+        'str': '#e0af68',
+        'var': '#7dcfff',
+        'op': '#bb9af7',
+        'flag': '#7aa2f7',
+        'path': 'underline',
+        'comment': '#565f89 italic',
+        'dir': '#7aa2f7 bold',
 })
 
 # ══════════════════════════════════════════════════════════════════════════════

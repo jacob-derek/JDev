@@ -30,6 +30,11 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 from prompt_toolkit.filters import Condition
 
+try:
+    import jtheme  # paleta compartilhada do JDev (opcional)
+except ImportError:
+    jtheme = None
+
 # ============================================================
 # ESTADO
 # ============================================================
@@ -911,24 +916,26 @@ layout = Layout(
     ])
 )
 
-estilo = Style.from_dict({
-    "": "#c0caf5 bg:#1a1b26",
-    "header": "bg:#7aa2f7 fg:#16161e bold",
-    "path": "bg:#292e42 fg:#c0caf5 bold",
-    "border": "fg:#3b4261 bg:#1a1b26",
-    "selected": "bg:#292e42 fg:#e0af68 bold",
-    "item": "fg:#c0caf5 bg:#1a1b26",
-    "preview": "fg:#c0caf5 bg:#1a1b26",
-    "empty": "fg:#636da6 bg:#1a1b26 italic",
-    "footer": "bg:#16161e fg:#9aa5ce bold",
-    "status": "bg:#292e42 fg:#9ece6a bold",
-    "prompt": "bg:#f7768e fg:#16161e bold",
-    "outline": "bg:#16161e",
-    "outline.header": "fg:#7aa2f7 bg:#16161e bold",
-    "outline.help": "fg:#636da6 bg:#16161e",
-    "outline.selected": "bg:#292e42 fg:#e0af68 bold",
-    "outline.item": "fg:#c0caf5 bg:#16161e",
-    "line-number.separator": "fg:#3b4261 bg:#1a1b26",
+# Paleta: usa o jtheme.py (se estiver na mesma pasta); senão, o Tokyo Night embutido abaixo.
+_tema = getattr(jtheme, "estilo_jfiles", None)
+estilo = Style.from_dict(_tema() if _tema else {
+        "": "#c0caf5 bg:#1a1b26",
+        "header": "bg:#7aa2f7 fg:#16161e bold",
+        "path": "bg:#292e42 fg:#c0caf5 bold",
+        "border": "fg:#3b4261 bg:#1a1b26",
+        "selected": "bg:#292e42 fg:#e0af68 bold",
+        "item": "fg:#c0caf5 bg:#1a1b26",
+        "preview": "fg:#c0caf5 bg:#1a1b26",
+        "empty": "fg:#636da6 bg:#1a1b26 italic",
+        "footer": "bg:#16161e fg:#9aa5ce bold",
+        "status": "bg:#292e42 fg:#9ece6a bold",
+        "prompt": "bg:#f7768e fg:#16161e bold",
+        "outline": "bg:#16161e",
+        "outline.header": "fg:#7aa2f7 bg:#16161e bold",
+        "outline.help": "fg:#636da6 bg:#16161e",
+        "outline.selected": "bg:#292e42 fg:#e0af68 bold",
+        "outline.item": "fg:#c0caf5 bg:#16161e",
+        "line-number.separator": "fg:#3b4261 bg:#1a1b26",
 })
 
 

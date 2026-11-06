@@ -1,0 +1,57 @@
+--- a/JDesk.py	2026-10-31 09:09:46.513515569 +0000
++++ b/JDesk.py	2026-10-31 09:09:46.516422344 +0000
+@@ -312,8 +312,10 @@
+ 
+         self.metrics = Metrics()
+         self.metrics.start()
+-        self.bar = StatusBar(root, N_WS, self.switch)
+-        self.bar.pack(side=tk.TOP, fill=tk.X)
++        # Barra no RODAPÉ, em faixa reservada: o JWM tira a mesma altura da área das janelas, então ela
++        # nunca cobre nada. Super+Shift+B esconde/mostra (o JWM avisa pelo ~/.cache/jwm-state.json).
++        self.bar = StatusBar(root, N_WS, self.switch, on_visibilidade=self._bar_visivel)
++        self.bar.pack(side=tk.BOTTOM, fill=tk.X)
+         self.area = tk.Frame(root, bg=DESK_BG, bd=0, highlightthickness=0)
+         self.area.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+ 
+@@ -325,6 +327,12 @@
+         root.protocol("WM_DELETE_WINDOW", self.close)
+         self._poll_ipc()
+ 
++    def _bar_visivel(self, visivel):
++        if visivel:
++            self.bar.pack(side=tk.BOTTOM, fill=tk.X, before=self.area)
++        else:
++            self.bar.pack_forget()
++
+     def all_panes(self):
+         return [p for w in self.ws if w for p in w.panes.values()]
+ 
+--- a/JTerm.py	2026-10-31 09:09:46.514147437 +0000
++++ b/JTerm.py	2026-10-31 09:09:46.516464325 +0000
+@@ -47,9 +47,8 @@
+ KEEP_OPEN_ON_ERROR = True  # se o processo sair com erro, mantém a janela para ler a mensagem
+ 
+ # ── Tema Tokyo Night ─────────────────────────────────────────────────────────
+-DEFAULT_FG = "#a9b1d6"
+-DEFAULT_BG = "#1a1b26"
+-SELECT_BG = "#33467c"
++from jtheme import (ACCENTS, BLUE as _BLUE, BORDER_IDLE, DESK_BG, FG as DEFAULT_FG, HEADER_FG_FOCUS,
++                    HEADER_FG_IDLE, PANE_BG as DEFAULT_BG, SELECT_BG)  # paleta única do JDev
+ PAD = 8
+ DEFAULT_KEY = (DEFAULT_FG, DEFAULT_BG, False, False, False, False)
+ 
+@@ -238,13 +237,7 @@
+ 
+ 
+ # ── Painel: um pty + emulador + widget (reutilizável em janela única ou no JDesk) ──
+-DESK_BG = "#13141c"        # fundo do JDesk: aparece como o "espaço" entre os painéis
+-BORDER_IDLE = "#292e42"
+-BORDER_FOCUS = "#7aa2f7"
+-HEADER_FG_IDLE = "#6b7394"
+-HEADER_FG_FOCUS = "#16161e"
+-# cor de cada painel: ponto no cabeçalho (inativo) e borda/cabeçalho (com foco)
+-ACCENTS = {"jfiles": "#7aa2f7", "jshell": "#9ece6a", "jcode": "#bb9af7", "jclass": "#e0af68"}
++BORDER_FOCUS = _BLUE
+ 
+ _family_cache = None
+ 

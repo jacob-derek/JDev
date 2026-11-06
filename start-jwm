@@ -1,6 +1,16 @@
 #!/bin/sh
 set -eu
-HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# Funciona também via link simbólico (ex.: ~/.local/bin/jwm -> ~/JDev/start-jwm).
+SELF=$(readlink -f -- "$0" 2>/dev/null || printf '%s' "$0")
+HERE=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
+
+# Uso: jwm [--no-ui]    --no-ui (ou --no-jdesk): só o gerenciador de janelas, sem JDesk e sem JBar.
+case "${1:-}" in
+    -h|--help)
+        echo "uso: $(basename -- "$0") [--no-ui]"
+        echo "  --no-ui   sobe só o JWM: sem JDesk e sem JBar (sistema liso; o wallpaper aparece inteiro)"
+        exit 0 ;;
+esac
 
 if ! command -v startx >/dev/null 2>&1; then
     echo "JWM: startx não encontrado. Instale Xorg e xinit." >&2
@@ -15,4 +25,4 @@ DISPLAY_ID=:0
 if [ -S /tmp/.X11-unix/X0 ]; then
     DISPLAY_ID=:1
 fi
-exec startx "$HERE/jwm-session" -- "$DISPLAY_ID" -nolisten tcp
+exec startx "$HERE/jwm-session" "$@" -- "$DISPLAY_ID" -nolisten tcp

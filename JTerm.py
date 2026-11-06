@@ -47,23 +47,34 @@ FONT_MIN, FONT_MAX = 7, 32
 KEEP_OPEN_ON_ERROR = True  # se o processo sair com erro, mantém a janela para ler a mensagem
 
 # ── Tema Tokyo Night ─────────────────────────────────────────────────────────
-DEFAULT_FG = "#a9b1d6"
-DEFAULT_BG = "#1a1b26"
-SELECT_BG = "#33467c"
+try:  # paleta única do JDev; opcional: sem o jtheme.py ao lado vale o Tokyo Night embutido
+    from jtheme import (ACCENTS, BLUE as _BLUE, BORDER_IDLE, DESK_BG, FG as DEFAULT_FG, HEADER_FG_FOCUS,
+                        HEADER_FG_IDLE, PANE_BG as DEFAULT_BG, SELECT_BG)
+except ImportError:
+    DEFAULT_FG, DEFAULT_BG, SELECT_BG = "#a9b1d6", "#1a1b26", "#33467c"
+    DESK_BG = "#13141c"        # fundo do JDesk: aparece como o "espaço" entre os painéis
+    BORDER_IDLE, _BLUE = "#292e42", "#7aa2f7"
+    HEADER_FG_IDLE, HEADER_FG_FOCUS = "#6b7394", "#16161e"
+    # cor de cada painel: ponto no cabeçalho (inativo) e borda/cabeçalho (com foco)
+    ACCENTS = {"jfiles": "#7aa2f7", "jshell": "#9ece6a", "jcode": "#bb9af7", "jclass": "#e0af68"}
 PAD = 8
 DEFAULT_KEY = (DEFAULT_FG, DEFAULT_BG, False, False, False, False)
 
 # A paleta ANSI precisa distinguir preto como TEXTO de preto como FUNDO:
 # usar #15161e para os dois tornava texto ANSI preto quase invisível no fundo #1a1b26.
-ANSI_BLACK_FG = "#7b83a8"       # preto ANSI elevado para uma cor legível em texto
-ANSI_BLACK_BG = "#15161e"       # preto real continua escuro quando usado como fundo
-COLOR_NAMES = {
-    "black": ANSI_BLACK_BG, "red": "#f7768e", "green": "#9ece6a", "brown": "#e0af68",
-    "blue": "#7aa2f7", "magenta": "#bb9af7", "cyan": "#7dcfff", "white": "#a9b1d6",
-    "brightblack": "#7b83a8", "brightred": "#f7768e", "brightgreen": "#9ece6a",
-    "brightbrown": "#e0af68", "brightyellow": "#e0af68", "brightblue": "#7aa2f7",
-    "brightmagenta": "#bb9af7", "brightcyan": "#7dcfff", "brightwhite": "#c0caf5",
-}
+try:
+    from jtheme import ANSI_BLACK_BG, ANSI_BLACK_FG, COLOR_NAMES, LIGHT  # paleta ANSI vem do tema
+except ImportError:
+    LIGHT = False
+    ANSI_BLACK_FG = "#7b83a8"       # preto ANSI elevado para uma cor legível em texto
+    ANSI_BLACK_BG = "#15161e"       # preto real continua escuro quando usado como fundo
+    COLOR_NAMES = {
+        "black": ANSI_BLACK_BG, "red": "#f7768e", "green": "#9ece6a", "brown": "#e0af68",
+        "blue": "#7aa2f7", "magenta": "#bb9af7", "cyan": "#7dcfff", "white": "#a9b1d6",
+        "brightblack": "#7b83a8", "brightred": "#f7768e", "brightgreen": "#9ece6a",
+        "brightbrown": "#e0af68", "brightyellow": "#e0af68", "brightblue": "#7aa2f7",
+        "brightmagenta": "#bb9af7", "brightcyan": "#7dcfff", "brightwhite": "#c0caf5",
+    }
 HEX_RE = re.compile(r"[0-9a-fA-F]{6}")
 
 FONT_CANDIDATES = ["Cascadia Mono", "Consolas", "JetBrains Mono", "DejaVu Sans Mono",
@@ -238,13 +249,7 @@ class TermScreen(pyte.Screen):
 
 
 # ── Painel: um pty + emulador + widget (reutilizável em janela única ou no JDesk) ──
-DESK_BG = "#13141c"        # fundo do JDesk: aparece como o "espaço" entre os painéis
-BORDER_IDLE = "#292e42"
-BORDER_FOCUS = "#7aa2f7"
-HEADER_FG_IDLE = "#6b7394"
-HEADER_FG_FOCUS = "#16161e"
-# cor de cada painel: ponto no cabeçalho (inativo) e borda/cabeçalho (com foco)
-ACCENTS = {"jfiles": "#7aa2f7", "jshell": "#9ece6a", "jcode": "#bb9af7", "jclass": "#e0af68"}
+BORDER_FOCUS = _BLUE
 
 _family_cache = None
 
@@ -698,8 +703,8 @@ class PtyPane(tk.Frame):
                 near_black = max((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255) <= 0x25
             if c == "default":
                 r = default
-            elif foreground and (c == "black" or near_black):
-                # ANSI black e truecolor quase preto ficam legíveis como texto.
+            elif foreground and not LIGHT and (c == "black" or near_black):
+                # ANSI black e truecolor quase preto ficam legíveis como texto (só em tema escuro).
                 r = ANSI_BLACK_FG
             elif c in COLOR_NAMES:
                 r = COLOR_NAMES[c]

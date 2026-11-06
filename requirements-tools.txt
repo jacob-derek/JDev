@@ -1,0 +1,12 @@
+# Ferramentas opcionais (pasta tools/). Nada disso é necessário para o JDev básico.
+# Instalar:  pip install -r requirements-tools.txt
+
+# JClass (Google Classroom / Drive)
+google-api-python-client
+google-auth-oauthlib
+
+# JSlides (apresentações)
+# Atenção: o pymupdf é AGPL. É uma dependência opcional, instalada por você; o JDev não o inclui.
+pymupdf
+python-pptx
+# Sistema (fora do pip): LibreOffice (soffice) para abrir .pptx/.ppt/.odp no JSlides

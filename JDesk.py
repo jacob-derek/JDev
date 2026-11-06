@@ -82,11 +82,13 @@ RESIZE = {"h": (-1, 0), "left": (-1, 0), "l": (1, 0), "right": (1, 0),
 
 
 def achar(nome):
-    """Procura o script em JDev/<Nome>/ e depois em JDev/ (ex.: JDev/JClass/JClass.py)."""
+    """Procura o script em JDev/<Nome>/, em JDev/ e em JDev/tools/ (ex.: JDev/tools/JClass/JClass.py)."""
     stem = os.path.splitext(nome)[0]
     candidatos = [  # a subpasta vem primeiro: JDev/JClass/JClass.py vence um JClass.py solto na raiz
         os.path.join(BASE_DIR, stem, nome),
         os.path.join(BASE_DIR, nome),
+        os.path.join(BASE_DIR, "tools", stem, nome),
+        os.path.join(BASE_DIR, "tools", nome),
     ]
     for c in candidatos:
         if os.path.isfile(c):
@@ -312,8 +314,10 @@ class JDesk:
 
         self.metrics = Metrics()
         self.metrics.start()
-        self.bar = StatusBar(root, N_WS, self.switch)
-        self.bar.pack(side=tk.TOP, fill=tk.X)
+        # Barra no RODAPÉ, em faixa reservada: o JWM tira a mesma altura da área das janelas, então ela
+        # nunca cobre nada. Super+Shift+B esconde/mostra (o JWM avisa pelo ~/.cache/jwm-state.json).
+        self.bar = StatusBar(root, N_WS, self.switch, on_visibilidade=self._bar_visivel)
+        self.bar.pack(side=tk.BOTTOM, fill=tk.X)
         self.area = tk.Frame(root, bg=DESK_BG, bd=0, highlightthickness=0)
         self.area.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
@@ -324,6 +328,12 @@ class JDesk:
         self.switch(0)
         root.protocol("WM_DELETE_WINDOW", self.close)
         self._poll_ipc()
+
+    def _bar_visivel(self, visivel):
+        if visivel:
+            self.bar.pack(side=tk.BOTTOM, fill=tk.X, before=self.area)
+        else:
+            self.bar.pack_forget()
 
     def all_panes(self):
         return [p for w in self.ws if w for p in w.panes.values()]

@@ -7,11 +7,32 @@ LOG=${XDG_CACHE_HOME:-$HOME/.cache}/jwm-session.log
 mkdir -p "$(dirname -- "$LOG")" 2>/dev/null || true
 printf '%s %s\n' "$(date '+%F %T')" "sessão iniciada (DISPLAY=${DISPLAY:-?})" >> "$LOG" 2>/dev/null || true
 
+# Cursor: tira o "X" do Xorg e usa o Adwaita (pacote adwaita-icon-theme)
+export XCURSOR_THEME="${XCURSOR_THEME:-Bibata-Modern-Classic}"
+export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
+command -v xsetroot >/dev/null 2>&1 && xsetroot -cursor_name left_ptr || true
+
 # Monitores + wallpaper (HDMI/VGA, só um deles, ou os dois). Também é chamado pelo JWM
 # quando um monitor é ligado/desligado. Nunca derruba a sessão: se falhar, segue sem.
 if [ -f "$HERE/jwm-layout" ]; then
     sh "$HERE/jwm-layout" >/dev/null 2>&1 || \
         printf '%s %s\n' "$(date '+%F %T')" "jwm-layout falhou" >> "$LOG" 2>/dev/null || true
+fi
+
+# Compositor (sombra, cantos arredondados, animações). Opcional: sem picom ou sem config, segue sem.
+PICOM_CONF=${XDG_CONFIG_HOME:-$HOME/.config}/picom/picom.conf
+if ! command -v picom >/dev/null 2>&1; then
+    printf '%s %s\n' "$(date '+%F %T')" "picom não instalado; seguindo sem compositor" >> "$LOG" 2>/dev/null || true
+elif [ ! -f "$PICOM_CONF" ]; then
+    printf '%s %s\n' "$(date '+%F %T')" "sem $PICOM_CONF; picom não iniciado" >> "$LOG" 2>/dev/null || true
+elif ! pgrep -x picom >/dev/null 2>&1; then
+    picom --config "$PICOM_CONF" >> "$LOG" 2>&1 &
+    PICOM_PID=$!
+    sleep 0.3
+    if ! kill -0 "$PICOM_PID" 2>/dev/null; then   # caiu na hora (ex.: GLX com problema): tenta o backend simples
+        printf '%s %s\n' "$(date '+%F %T')" "picom (glx) falhou; tentando xrender" >> "$LOG" 2>/dev/null || true
+        picom --config "$PICOM_CONF" --backend xrender >> "$LOG" 2>&1 &
+    fi
 fi
 
 exec python3 "$HERE/JWM.py" "$@"

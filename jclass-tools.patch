@@ -1,0 +1,29 @@
+--- a/JDesk.py	2026-11-06 01:12:20.842140648 +0000
++++ b/JDesk.py	2026-11-06 01:12:20.873464006 +0000
+@@ -82,11 +82,13 @@
+ 
+ 
+ def achar(nome):
+-    """Procura o script em JDev/<Nome>/ e depois em JDev/ (ex.: JDev/JClass/JClass.py)."""
++    """Procura o script em JDev/<Nome>/, em JDev/ e em JDev/tools/ (ex.: JDev/tools/JClass/JClass.py)."""
+     stem = os.path.splitext(nome)[0]
+     candidatos = [  # a subpasta vem primeiro: JDev/JClass/JClass.py vence um JClass.py solto na raiz
+         os.path.join(BASE_DIR, stem, nome),
+         os.path.join(BASE_DIR, nome),
++        os.path.join(BASE_DIR, "tools", stem, nome),
++        os.path.join(BASE_DIR, "tools", nome),
+     ]
+     for c in candidatos:
+         if os.path.isfile(c):
+--- a/JShell.py	2026-11-06 01:12:20.843640085 +0000
++++ b/JShell.py	2026-11-06 01:12:20.874341367 +0000
+@@ -46,7 +46,8 @@
+ BASE_DIR = Path(__file__).resolve().parent
+ JCODE = BASE_DIR / "JCode.py"
+ JFILES = BASE_DIR / "JFiles.py"
+-JCLASS = BASE_DIR / "JClass" / "JClass.py"
++JCLASS = next((c for c in (BASE_DIR / "tools" / "JClass" / "JClass.py", BASE_DIR / "JClass" / "JClass.py")
++               if c.is_file()), BASE_DIR / "tools" / "JClass" / "JClass.py")
+ HISTORICO = Path.home() / ".jshell_history"
+ RC = Path.home() / ".jshellrc"
+ IS_WIN = os.name == "nt"
