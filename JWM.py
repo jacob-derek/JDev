@@ -15,7 +15,6 @@ import logging
 import os
 import re
 import select
-import shlex
 import shutil
 import subprocess
 import sys

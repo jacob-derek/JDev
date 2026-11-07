@@ -188,7 +188,7 @@ def parse(args, bool_flags="", val_flags=""):
                     try:
                         flags[c] = next(it)
                     except StopIteration:
-                        raise ErroArgs(f"a opção -{c} precisa de um valor")
+                        raise ErroArgs(f"a opção -{c} precisa de um valor") from None
                 break
             else:
                 raise ErroArgs(f"opção desconhecida: -{c}")
@@ -267,7 +267,7 @@ def abrir_texto(caminho):
                 raise ErroArgs(f"Arquivo binário: {p}")
         return open(p, "r", encoding="utf-8", errors="replace")
     except PermissionError:
-        raise ErroArgs(f"Sem permissão para ler: {p}")
+        raise ErroArgs(f"Sem permissão para ler: {p}") from None
 
 
 def por_arquivo(arquivos, fn):
@@ -406,7 +406,7 @@ def _tipo(e):
     return "o"
 
 
-def listar(alvo=None, detalhes=False, ordem="nome", 
+def listar(alvo=None, detalhes=False, ordem="nome",
         inverter=False, mostrar_ocultos=False):
     pasta = Path(alvo).expanduser() if alvo else Path.cwd()
 
@@ -416,7 +416,7 @@ def listar(alvo=None, detalhes=False, ordem="nome",
                 e for e in it
                 if mostrar_ocultos or not e.name.startswith(".")
             ]
-            
+
     except FileNotFoundError:
         return erro(f"Não encontrado: {fmt(pasta)}")
     except NotADirectoryError:
@@ -432,8 +432,8 @@ def listar(alvo=None, detalhes=False, ordem="nome",
         except OSError:
             st = None
         itens.append((e, _tipo(e), st))
-        
-        
+
+
     def chave(it):
         e, t, st = it
         grupo = 0 if t == "d" else 1
@@ -874,7 +874,7 @@ def _num_linhas(flags):
     try:
         return int(flags.get("n", 10))
     except ValueError:
-        raise ErroArgs("número de linhas inválido")
+        raise ErroArgs("número de linhas inválido") from None
 
 
 @comando("head", "[-n N] arquivo...", "Mostra as primeiras linhas (padrão: 10)", "Texto")
@@ -1430,7 +1430,7 @@ def executar_pipeline_nativo(tokens):
     abertos = []
     anterior = None
     try:
-        for indice, (argv, redirects) in enumerate(zip(comandos, redirs)):
+        for indice, (argv, redirects) in enumerate(zip(comandos, redirs, strict=True)):
             entrada = anterior
             saida = subprocess.PIPE if indice < len(comandos) - 1 else None
             # Redirecionamentos explícitos prevalecem sobre stdin/stdout do pipeline,
@@ -2039,7 +2039,7 @@ def _estilo_palavra(p, comando):
 
 def colorir(linha):
     """Fragmentos coloridos que reproduzem `linha` exatamente (só muda o estilo)."""
-    frags, pos, comando, envolt = [], 0, True, False
+    frags, pos, comando = [], 0, True
     for ini, fim, tipo, texto, _ in escanear(linha):
         if ini > pos:
             frags.append(("", linha[pos:ini]))

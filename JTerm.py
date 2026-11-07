@@ -110,7 +110,11 @@ PARTIAL_RE = re.compile(r"\x1b(?:\[(?:\?\d{0,4})?)?$")
 # ── Backends de PTY ──────────────────────────────────────────────────────────
 class UnixPty:
     def __init__(self, argv, rows, cols, env, cwd):
-        import fcntl, pty, struct, subprocess, termios
+        import fcntl
+        import pty
+        import struct
+        import subprocess
+        import termios
         self._fcntl, self._termios, self._struct = fcntl, termios, struct
         self.master, slave = pty.openpty()
         self.set_size(rows, cols)

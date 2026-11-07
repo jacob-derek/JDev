@@ -21,3 +21,16 @@ jobs:
       # Sem dependências: os testes usam só a biblioteca padrão (unittest).
       - name: Testes
         run: python -m unittest discover -s tests -t . -v
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Dica: fixe a versão (ex.: ruff==0.x.y) para o CI não mudar sozinho quando sair regra nova.
+      - name: Ruff
+        run: |
+          pip install ruff
+          ruff check

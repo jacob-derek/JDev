@@ -212,10 +212,10 @@ def criar_arquivo(nome):
     destino = diretorio_atual / nome
     try:
         destino.touch(exist_ok=False)
-        definir_status(f"✓ Arquivo criado")
+        definir_status("✓ Arquivo criado")
         atualizar_lista()
     except FileExistsError:
-        definir_status(f"✗ Já existe um item com este nome.")
+        definir_status("✗ Já existe um item com este nome.")
     except Exception as erro:
         definir_status(f"✗ Erro: {erro}")
 
@@ -229,10 +229,10 @@ def criar_pasta(nome):
     destino = diretorio_atual / nome
     try:
         destino.mkdir()
-        definir_status(f"✓ Pasta criada")
+        definir_status("✓ Pasta criada")
         atualizar_lista()
     except FileExistsError:
-        definir_status(f"✗ Já existe um item com este nome.")
+        definir_status("✗ Já existe um item com este nome.")
     except Exception as erro:
         definir_status(f"✗ Erro: {erro}")
 
@@ -394,7 +394,7 @@ def gerar_preview():
     if not item:
         return [("class:empty", " Nenhum item selecionado.\n")]
 
-    linhas = [("class:outline.header", f" ── PREVIEW ──\n\n")]
+    linhas = [("class:outline.header", " ── PREVIEW ──\n\n")]
 
     if modo_visualizacao == "info":
         linhas.append(("class:item", f" Nome: {item.name}\n"))
@@ -402,21 +402,21 @@ def gerar_preview():
         linhas.append(("class:item", f" Tipo: {'Pasta' if item.is_dir() else 'Arquivo'}\n"))
         if item.is_file():
             linhas.append(("class:item", f" Extensão: {item.suffix or '(nenhuma)'}\n"))
-        
+
         try:
             stat = item.stat()
             tamanho = formatar_tamanho(stat.st_size) if item.is_file() else "-"
             modificado = datetime.datetime.fromtimestamp(stat.st_mtime).strftime('%d/%m/%Y %H:%M:%S')
-            
+
             linhas.append(("class:item", f" Tamanho: {tamanho}\n"))
             linhas.append(("class:item", f" Modificado: {modificado}\n"))
-            
+
             if item.is_dir():
                 qtd = len(list(item.iterdir()))
                 linhas.append(("class:item", f" Itens na pasta: {qtd}\n"))
         except OSError:
             linhas.append(("class:empty", " [Erro ao ler atributos]\n"))
-            
+
         return linhas
 
     # Miniatura de imagem (renderizada com blocos RGB, compatível com terminais de texto modernos).
@@ -781,7 +781,7 @@ def executar_acao_input(event):
         else:
             try:
                 item.rename(destino)
-                definir_status(f"✓ Item renomeado")
+                definir_status("✓ Item renomeado")
                 atualizar_lista()
             except OSError as e:
                 definir_status(f"✗ Erro: {e}")
@@ -1028,7 +1028,7 @@ if __name__ == "__main__":
                                  stderr=subprocess.DEVNULL)
             else:
                 subprocess.run(cmd, check=False)
-        
+
         except OSError as erro:
             definir_status(
                 f"Erro ao abrir o JCode: {erro}"

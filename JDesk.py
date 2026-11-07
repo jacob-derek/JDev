@@ -43,8 +43,7 @@ from tkinter import messagebox
 
 import jipc
 from JBar import Metrics, StatusBar, adjust_volume, brilho, em_thread, toggle_mute
-from JTerm import (ALT_MASK, BASE_DIR, BORDER_IDLE, DEFAULT_BG, DESK_BG, Pump, PtyPane,
-                   enable_dpi_awareness)
+from JTerm import ALT_MASK, BASE_DIR, DESK_BG, Pump, PtyPane, enable_dpi_awareness
 
 try:
     from JSlides import SlidesPane
