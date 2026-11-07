@@ -21,3 +21,23 @@ client_secret*.json
 token.json
 token.pickle
 .env
+
+# Mais segredos, caches e lixo de editor
+*.pem
+*.key
+.env.*
+!.env.example
+.jcache/
+.vscode/
+.idea/
+archive/
+backups/
+*.orig
+/*.patch
+
+# Conteúdo baixado do Classroom (ajuste para a(s) sua(s) pasta(s) de download)
+Downloads/
+downloads/
+*.pptx
+*.ppt
+*.part

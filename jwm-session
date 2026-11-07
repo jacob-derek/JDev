@@ -7,7 +7,7 @@ LOG=${XDG_CACHE_HOME:-$HOME/.cache}/jwm-session.log
 mkdir -p "$(dirname -- "$LOG")" 2>/dev/null || true
 printf '%s %s\n' "$(date '+%F %T')" "sessão iniciada (DISPLAY=${DISPLAY:-?})" >> "$LOG" 2>/dev/null || true
 
-# Cursor: tira o "X" do Xorg e usa o Adwaita (pacote adwaita-icon-theme)
+# Cursor: tira o "X" do Xorg e usa o Bibata (instalado em ~/.icons)
 export XCURSOR_THEME="${XCURSOR_THEME:-Bibata-Modern-Classic}"
 export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
 command -v xsetroot >/dev/null 2>&1 && xsetroot -cursor_name left_ptr || true
