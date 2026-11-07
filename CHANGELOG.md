@@ -3,7 +3,7 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e versionamento
 semântico (`MAJOR.MINOR.PATCH`).
 
-## [1.0.0] - a definir
+## [1.0.0] - 2026-11-07
 
 Primeira versão oficial: estável, bonita e leve.
 
