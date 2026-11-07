@@ -15,7 +15,7 @@ Primeira versão oficial: estável, bonita e leve.
   a divisão e `--no-ui` (apelido de `--no-jdesk`) para subir só o gerenciador de janelas.
 - **JBar**: barra em pílulas no rodapé, em faixa reservada, que o JWM publica em
   `~/.cache/jwm-state.json` (modo, divisão pendente, título); `Super+Shift+B` mostra e esconde.
-- **Temas** (`jtheme.py`): Tokyo Night, Catppuccin Mocha, Gruvbox Dark e Dawn (claro). O tema vale para
+- **Temas** (`jtheme.py`): Tokyo Night, Catppuccin Mocha, Gruvbox Dark, Dawn (claro) e Ashes. O tema vale para
   JWM, JBar, JDesk, JTerm, JCode, JFiles, JShell e JRun, e o `jtheme.py` é opcional: sem ele
   cada programa usa o Tokyo Night embutido.
 - **Wallpaper por monitor** (`jwm-layout`): `horizontal.*` e `vertical.*` em `~/.config/jdev/`,
