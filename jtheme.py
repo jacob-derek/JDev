@@ -13,12 +13,14 @@ Linha de comando:
     python3 jtheme.py              lista os temas (o ativo vem marcado)
     python3 jtheme.py set gruvbox  grava a escolha (vale na próxima sessão / próximo JDesk)
     python3 jtheme.py show [nome]  mostra as cores no terminal
+    python3 jtheme.py check [nome] confere chaves, cores e contraste (aponta o valor errado)
 
 Só constantes e funções leves: pode ser importado por qualquer programa sem custo.
 """
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -49,6 +51,90 @@ THEMES: dict[str, dict] = {
         blue="#638c79", cyan="#72a99a", cyan2="#9fc4b0", purple="#a17c79",
         border_idle="#2c4035", header_idle="#9a9a70", header_focus="#151914",
         ansi_black="#151914", ansi_brightblack="#71806c", ansi_white="#d8c6a0", ansi_brightwhite="#f0dfb5",
+    ),
+
+    # Deftones — Around the Fur: azul frio, carvão e tons quentes de pele.
+    "around_the_fur": dict(
+        label="Around the Fur", light=False,
+        bg_deep="#090d13", bg="#111923", bg_alt="#1b2835", bg_hover="#293746",
+        line="#263746", line2="#40566a", select="#3d5368",
+        fg="#c5cbd0", fg_bright="#e8e3dc", fg_soft="#aab6c1", dim="#718292", comment="#687887", ln="#4b5d6d",
+        secondary="#9aa8b3",
+        on_bright="#10151b", on_accent="#10151b", focus="#d58b79", border="#596a78",
+        red="#d97870", green="#9eaa91", yellow="#d6b58b", orange="#d99573",
+        blue="#789bb8", cyan="#8db5c8", cyan2="#b0cbd5", purple="#a99ab8",
+        border_idle="#263746", header_idle="#9aa8b3", header_focus="#10151b",
+        ansi_black="#10151b", ansi_brightblack="#718292", ansi_white="#c5cbd0", ansi_brightwhite="#e8e3dc",
+    ),
+
+    # Capa escura de pintura e papel envelhecido: preto, vinho e vermelho queimado.
+    "hipopoto": dict(
+        label="Hipopoto", light=False,
+        bg_deep="#090808", bg="#141111", bg_alt="#211918", bg_hover="#302321",
+        line="#382725", line2="#59403a", select="#63312d",
+        fg="#c9b8a7", fg_bright="#ead9c6", fg_soft="#b9a698", dim="#806e67", comment="#78645e", ln="#594943",
+        secondary="#a68b7c",
+        on_bright="#100b0b", on_accent="#f2ded0", focus="#b63e35", border="#72514a",
+        red="#d34b3f", green="#8e9a72", yellow="#c6a16a", orange="#d16a45",
+        blue="#778a91", cyan="#8ba6a3", cyan2="#b0c2b8", purple="#a77b82",
+        border_idle="#382725", header_idle="#a68b7c", header_focus="#100b0b",
+        ansi_black="#100b0b", ansi_brightblack="#78645e", ansi_white="#c9b8a7", ansi_brightwhite="#ead9c6",
+    ),
+
+    # Cinza neutro: grafite, aço e branco suave.
+    "carbon": dict(
+        label="Carbon", light=False,
+        bg_deep="#101112", bg="#191b1e", bg_alt="#24272b", bg_hover="#30343a",
+        line="#2c3035", line2="#454b53", select="#414a55",
+        fg="#c1c5ca", fg_bright="#eceff2", fg_soft="#a9afb7", dim="#777f89", comment="#737b84", ln="#555d66",
+        secondary="#969da6",
+        on_bright="#111315", on_accent="#111315", focus="#b5bec8", border="#626b75",
+        red="#d97878", green="#9caf91", yellow="#d4bd83", orange="#d69a72",
+        blue="#8da9c4", cyan="#91b9bf", cyan2="#b1cbd0", purple="#b1a0c7",
+        border_idle="#2c3035", header_idle="#969da6", header_focus="#111315",
+        ansi_black="#111315", ansi_brightblack="#737b84", ansi_white="#c1c5ca", ansi_brightwhite="#eceff2",
+    ),
+
+    # Monokai clássico: fundo quase preto e acentos vivos.
+    "monokai": dict(
+        label="Monokai", light=False,
+        bg_deep="#171814", bg="#272822", bg_alt="#34352d", bg_hover="#414238",
+        line="#3e3d32", line2="#5b5a4f", select="#49483e",
+        fg="#cfcfc2", fg_bright="#f8f8f2", fg_soft="#b8b8a9", dim="#858577", comment="#75715e", ln="#666658",
+        secondary="#a6a696",
+        on_bright="#1b1c17", on_accent="#1b1c17", focus="#f92672", border="#68685c",
+        red="#f92672", green="#a6e22e", yellow="#e6db74", orange="#fd971f",
+        blue="#66d9ef", cyan="#66d9ef", cyan2="#a1efe4", purple="#ae81ff",
+        border_idle="#3e3d32", header_idle="#a6a696", header_focus="#1b1c17",
+        ansi_black="#1b1c17", ansi_brightblack="#75715e", ansi_white="#cfcfc2", ansi_brightwhite="#f8f8f2",
+    ),
+
+    # Nord: azul glacial e cinzas frios.
+    "nord": dict(
+        label="Nord", light=False,
+        bg_deep="#242933", bg="#2e3440", bg_alt="#3b4252", bg_hover="#434c5e",
+        line="#3b4252", line2="#4c566a", select="#4c607d",
+        fg="#d8dee9", fg_bright="#eceff4", fg_soft="#c5cedb", dim="#7b88a1", comment="#737f96", ln="#596579",
+        secondary="#aeb9ca",
+        on_bright="#242933", on_accent="#242933", focus="#88c0d0", border="#68758a",
+        red="#bf616a", green="#a3be8c", yellow="#ebcb8b", orange="#d08770",
+        blue="#81a1c1", cyan="#88c0d0", cyan2="#8fbcbb", purple="#b48ead",
+        border_idle="#3b4252", header_idle="#aeb9ca", header_focus="#242933",
+        ansi_black="#242933", ansi_brightblack="#737f96", ansi_white="#d8dee9", ansi_brightwhite="#eceff4",
+    ),
+
+    # Everforest: verde musgo, madeira e tons suaves.
+    "everforest": dict(
+        label="Everforest", light=False,
+        bg_deep="#1e2320", bg="#2d353b", bg_alt="#343f3e", bg_hover="#414b50",
+        line="#3d484d", line2="#56635f", select="#4b5c55",
+        fg="#d3c6aa", fg_bright="#e9e2d0", fg_soft="#c2b89f", dim="#859289", comment="#829181", ln="#65736b",
+        secondary="#a7b0a0",
+        on_bright="#202725", on_accent="#202725", focus="#a7c080", border="#66766b",
+        red="#e67e80", green="#a7c080", yellow="#dbbc7f", orange="#e69875",
+        blue="#7fbbb3", cyan="#83c092", cyan2="#9ecf9f", purple="#d699b6",
+        border_idle="#3d484d", header_idle="#a7b0a0", header_focus="#202725",
+        ansi_black="#202725", ansi_brightblack="#829181", ansi_white="#d3c6aa", ansi_brightwhite="#e9e2d0",
     ),
 
     "catppuccin": dict(
@@ -95,6 +181,12 @@ ALIASES = {
     "tokyo": "tokyonight", "tokyo-night": "tokyonight", "tn": "tokyonight",
     "catppuccin-mocha": "catppuccin", "mocha": "catppuccin", "cat": "catppuccin",
     "gruvbox-dark": "gruvbox", "gruv": "gruvbox",
+    "around-the-fur": "around_the_fur", "atf": "around_the_fur",
+    "hipopot(o)": "hipopoto", "hipo": "hipopoto",
+    "gray": "carbon", "grey": "carbon", "grafite": "carbon",
+    "monokai-classic": "monokai",
+    "nordic": "nord",
+    "ever-forest": "everforest",
     "light": "dawn", "claro": "dawn", "rosepine-dawn": "dawn",
 }
 PADRAO = "tokyonight"
@@ -296,6 +388,70 @@ def _mostrar(nome: str) -> None:
     print("  " + " ".join(chaves))
 
 
+_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _luz(h: str) -> float:
+    c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+
+def _contraste(a: str, b: str) -> float:
+    la, lb = sorted((_luz(a), _luz(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+# (cor do texto, cor do fundo, minimo, o que mede)
+_CONTRASTES_ERRO = (
+    ("fg", "bg", 6.0, "texto sobre o fundo"),
+    ("on_accent", "focus", 3.5, "texto sobre a cor de foco"),
+    ("on_bright", "green", 3.5, "texto sobre o verde do modo"),
+)
+_CONTRASTES_AVISO = (
+    ("dim", "bg_alt", 2.5, "texto apagado sobre a pilula"),
+    ("comment", "bg", 3.0, "comentarios sobre o fundo"),
+)
+
+
+def validar(nome: str | None = None) -> list[tuple[str, str, str]]:
+    """Confere os temas. Devolve (nivel, tema, mensagem); nivel = ERRO ou AVISO."""
+    ref = THEMES["tokyonight"]
+    saida: list[tuple[str, str, str]] = []
+    for n, t in THEMES.items():
+        if nome and n != nome:
+            continue
+        for k in sorted(set(ref) - set(t)):
+            saida.append(("ERRO", n, f"falta a chave '{k}'"))
+        for k in sorted(set(t) - set(ref)):
+            saida.append(("ERRO", n, f"chave desconhecida '{k}' (erro de digitacao?)"))
+        invalido = False
+        for k, v in t.items():
+            if k in ("label", "light") or k not in ref:
+                continue
+            if not isinstance(v, str) or not _HEX.match(v):
+                invalido = True
+                dica = ""
+                if isinstance(v, str) and re.fullmatch(r"[0-9a-fA-F]{6}", v):
+                    dica = " (falta o # no comeco)"
+                elif isinstance(v, str) and re.fullmatch(r"#?[0-9a-fA-F]{3}", v):
+                    dica = " (3 digitos nao valem: usar 6, ex.: #aabbcc)"
+                saida.append(("ERRO", n, f"{k} = {v!r} nao e uma cor valida{dica}"))
+        if invalido:
+            continue
+        for a, b, minimo, rotulo in _CONTRASTES_ERRO:
+            if a in t and b in t:
+                c = _contraste(t[a], t[b])
+                if c < minimo:
+                    saida.append(("ERRO", n, f"{rotulo}: contraste {c:.1f} (minimo {minimo}); ajustar {a} ou {b}"))
+        for a, b, minimo, rotulo in _CONTRASTES_AVISO:
+            if a in t and b in t:
+                c = _contraste(t[a], t[b])
+                if c < minimo:
+                    saida.append(("AVISO", n, f"{rotulo}: contraste {c:.1f} (ideal {minimo}+)"))
+    return saida
+
+
 def _main(argv: list[str]) -> int:
     cmd = argv[0] if argv else "list"
     if cmd in ("list", "ls"):
@@ -317,6 +473,17 @@ def _main(argv: list[str]) -> int:
         if os.environ.get("JTHEME"):
             print("Aviso: a variável JTHEME está definida e tem prioridade sobre o arquivo.")
         return 0
+    if cmd == "check":
+        alvo = _resolver(argv[1]) if len(argv) > 1 else None
+        if len(argv) > 1 and not alvo:
+            print(f"tema desconhecido: {argv[1]}", file=sys.stderr)
+            return 2
+        problemas = validar(alvo)
+        for nivel, n, msg in problemas:
+            print(f"{nivel:<5} {n}: {msg}")
+        erros = sum(1 for p in problemas if p[0] == "ERRO")
+        print(f"{erros} erro(s), {len(problemas) - erros} aviso(s) em {1 if alvo else len(THEMES)} tema(s)")
+        return 1 if erros else 0
     if cmd == "show":
         for nome in ([_resolver(argv[1])] if len(argv) > 1 and _resolver(argv[1]) else THEMES):
             _mostrar(nome)

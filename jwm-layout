@@ -104,7 +104,11 @@ aplicar() {
                 ;;
         esac
         [ "$o" = "$PRIM" ] && set -- "$@" --primary
-        [ -n "$anterior" ] && set -- "$@" --right-of "$anterior"
+        if [ -n "$anterior" ]; then
+            set -- "$@" --right-of "$anterior"
+        else
+            set -- "$@" --pos 0x0    # o primeiro fica em 0x0: sem isso o VGA sozinho manteria a posicao
+        fi                           # antiga (ex.: x=1600) e o mouse escaparia para a area vazia
         anterior=$o
     done
     tentar xrandr "$@"
@@ -124,110 +128,12 @@ else
 fi
 
 # ── Wallpaper ────────────────────────────────────────────────────────────────
-# Um por monitor, escolhido pela orientação REAL de cada um (lida do xrandr depois que a
-# rotação foi aplicada, então vale para qualquer combinação):
-#   em pé    (altura > largura: rotate left/right)  -> ~/.config/jdev/vertical.{png,jpg,jpeg,webp}
-#   deitado  (rotate normal/inverted)               -> ~/.config/jdev/horizontal.{png,jpg,jpeg,webp}
-# Cada imagem é ajustada ao tamanho do monitor (preenche, cortando o excesso, sem distorcer).
-# Faltou um dos dois arquivos? O outro (ou wallpaper.*, ou qualquer imagem da pasta) serve.
-# JWM_WALLPAPER=/caminho/imagem usa a MESMA imagem em todos os monitores.
-# Ferramentas, em ordem de preferência: xwallpaper (uma imagem por saída, o ideal), feh, hsetroot.
-#
-# Fica na raiz do X (não é janela). O JDesk cobre o monitor primário, então na prática
-# o wallpaper aparece nos outros monitores.
-DIR_WP=${XDG_CONFIG_HOME:-$HOME/.config}/jdev
-
-achar_imagem() {   # achar_imagem NOME -> imprime DIR_WP/NOME.ext (png, jpg, jpeg ou webp) se existir
-    for ext in png jpg jpeg webp PNG JPG JPEG WEBP; do
-        if [ -f "$DIR_WP/$1.$ext" ]; then
-            printf '%s\n' "$DIR_WP/$1.$ext"
-            return 0
-        fi
-    done
-    return 1
-}
-
-WP_UNICO=${JWM_WALLPAPER:-}
-case "$WP_UNICO" in "~/"*) WP_UNICO=$HOME/${WP_UNICO#"~/"} ;; esac   # "~" entre aspas não expande
-WP_H=$(achar_imagem horizontal || achar_imagem wallpaper || true)
-WP_V=$(achar_imagem vertical || true)
-if [ -z "$WP_H" ] && [ -z "$WP_V" ]; then                       # última chance: qualquer imagem da pasta
-    for ext in png jpg jpeg webp PNG JPG JPEG WEBP; do
-        for cand in "$DIR_WP"/*.$ext; do
-            if [ -f "$cand" ]; then
-                WP_H=$cand
-                break 2
-            fi
-        done
-    done
-fi
-[ -n "$WP_H" ] || WP_H=$WP_V
-[ -n "$WP_V" ] || WP_V=$WP_H
-
-# "SAÍDA LARGURA ALTURA X" de cada monitor ligado, da esquerda para a direita. A geometria que o
-# xrandr mostra (ex.: 900x1600+1920+0) já vem com a rotação aplicada.
-MONITORES=$(xrandr --query 2>/dev/null | awk '
-    $2 == "connected" {
-        for (i = 3; i <= NF; i++)
-            if ($i ~ /^[0-9]+x[0-9]+[+-][0-9]+[+-][0-9]+$/) {
-                split($i, g, /[x+-]/); print $1, g[1], g[2], g[3]; break
-            }
-    }' | sort -n -k4)
-
-imagem_para() {   # imagem_para LARGURA ALTURA -> vertical se estiver em pé, senão horizontal
-    if [ "$2" -gt "$1" ]; then printf '%s\n' "$WP_V"; else printf '%s\n' "$WP_H"; fi
-}
-
-aplicar_wallpaper() {
-    if command -v xwallpaper >/dev/null 2>&1; then
-        if [ -n "$WP_UNICO" ]; then
-            tentar xwallpaper --zoom "$WP_UNICO"
-            return
-        fi
-        set --
-        while read -r saida w h _x; do
-            [ -n "$saida" ] || continue
-            set -- "$@" --output "$saida" --zoom "$(imagem_para "$w" "$h")"
-            logar "wallpaper: $saida (${w}x${h}) -> $(imagem_para "$w" "$h")"
-        done <<EOF
-$MONITORES
-EOF
-        if [ "$#" -gt 0 ]; then
-            tentar xwallpaper "$@" || tentar xwallpaper --zoom "$WP_H"
-        else
-            tentar xwallpaper --zoom "$WP_H"
-        fi
-    elif command -v feh >/dev/null 2>&1; then
-        # feh associa as imagens aos monitores pela ordem (esquerda -> direita); sem xwallpaper
-        # é o melhor que dá. Recomendado: sudo xbps-install xwallpaper
-        if [ -n "$WP_UNICO" ]; then
-            tentar feh --no-fehbg --bg-fill "$WP_UNICO"
-            return
-        fi
-        set --
-        while read -r saida w h _x; do
-            [ -n "$saida" ] || continue
-            set -- "$@" "$(imagem_para "$w" "$h")"
-        done <<EOF
-$MONITORES
-EOF
-        if [ "$#" -gt 0 ]; then
-            tentar feh --no-fehbg --bg-fill "$@"
-        else
-            tentar feh --no-fehbg --bg-fill "$WP_H"
-        fi
-    elif command -v hsetroot >/dev/null 2>&1; then
-        tentar hsetroot -fill "${WP_UNICO:-$WP_H}"
-    else
-        logar "wallpaper: falta xwallpaper/feh/hsetroot (sudo xbps-install -S xwallpaper)"
-    fi
-}
-
-if [ -z "$WP_UNICO" ] && [ -z "$WP_H" ]; then
-    logar "wallpaper: nenhuma imagem (procurei em $DIR_WP: horizontal.* e vertical.*)"
-elif [ -n "$WP_UNICO" ] && [ ! -f "$WP_UNICO" ]; then
-    logar "wallpaper: arquivo não existe: $WP_UNICO"
+# Um por monitor, conforme a orientação de cada um (veja o jwm-wallpaper). Fica num script
+# separado para poder ser chamado sozinho, sem refazer a disposição dos monitores.
+AQUI=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -f "$AQUI/jwm-wallpaper" ]; then
+    sh "$AQUI/jwm-wallpaper" || logar "jwm-wallpaper falhou"
 else
-    aplicar_wallpaper || true
+    logar "jwm-wallpaper não encontrado em $AQUI"
 fi
 exit 0
