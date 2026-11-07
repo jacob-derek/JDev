@@ -44,7 +44,7 @@ THEMES: dict[str, dict] = {
         line="#2c4035", line2="#49604c", select="#6a4932",
         fg="#d8c6a0", fg_bright="#f0dfb5", fg_soft="#b8b497", dim="#82907b", comment="#71806c", ln="#536252",
         secondary="#a79a73",
-        on_bright="#151914", on_accent="#f1dfbd", focus="#d15b32", border="#59624c",
+        on_bright="#151914", on_accent="#151914", focus="#d15b32", border="#59624c",
         red="#d94b2f", green="#a8a94e", yellow="#d7ad55", orange="#e77a36",
         blue="#638c79", cyan="#72a99a", cyan2="#9fc4b0", purple="#a17c79",
         border_idle="#2c4035", header_idle="#9a9a70", header_focus="#151914",
