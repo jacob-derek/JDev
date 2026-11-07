@@ -17,6 +17,11 @@ try:  # canal de mensagens do JDesk (opcional)
 except ImportError:
     jipc = None
 
+try:  # ícones conforme o terminal (JICONES=nerd|emoji|ascii); sem jicons.py, emojis como sempre
+    from jicons import ARQUIVO, LINK, PASTA, PASTA_ABERTA
+except ImportError:
+    PASTA, PASTA_ABERTA, ARQUIVO, LINK = "📁", "📂", "📄", "🔗"
+
 from prompt_toolkit import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout, HSplit, VSplit, Window
@@ -24,6 +29,11 @@ from prompt_toolkit.layout.containers import ConditionalContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 from prompt_toolkit.filters import Condition
+
+try:
+    import jtheme  # paleta compartilhada do JDev (opcional)
+except ImportError:
+    jtheme = None
 
 # ============================================================
 # ESTADO
@@ -202,10 +212,10 @@ def criar_arquivo(nome):
     destino = diretorio_atual / nome
     try:
         destino.touch(exist_ok=False)
-        definir_status(f"✓ Arquivo criado")
+        definir_status("✓ Arquivo criado")
         atualizar_lista()
     except FileExistsError:
-        definir_status(f"✗ Já existe um item com este nome.")
+        definir_status("✗ Já existe um item com este nome.")
     except Exception as erro:
         definir_status(f"✗ Erro: {erro}")
 
@@ -219,10 +229,10 @@ def criar_pasta(nome):
     destino = diretorio_atual / nome
     try:
         destino.mkdir()
-        definir_status(f"✓ Pasta criada")
+        definir_status("✓ Pasta criada")
         atualizar_lista()
     except FileExistsError:
-        definir_status(f"✗ Já existe um item com este nome.")
+        definir_status("✗ Já existe um item com este nome.")
     except Exception as erro:
         definir_status(f"✗ Erro: {erro}")
 
@@ -316,7 +326,7 @@ def gerar_cabecalho():
     return [
         (
             "class:header",
-            " 📂 NAVEGADOR DE ARQUIVOS "
+            f" {PASTA_ABERTA} NAVEGADOR DE ARQUIVOS "
         ),
         (
             "class:path",
@@ -358,7 +368,7 @@ def gerar_corpo():
         except OSError:
             eh_pasta = False
 
-        icone = "📁" if eh_pasta else "📄"
+        icone = PASTA if eh_pasta else ARQUIVO
 
         if not eh_pasta:
             try:
@@ -384,7 +394,7 @@ def gerar_preview():
     if not item:
         return [("class:empty", " Nenhum item selecionado.\n")]
 
-    linhas = [("class:outline.header", f" ── PREVIEW ──\n\n")]
+    linhas = [("class:outline.header", " ── PREVIEW ──\n\n")]
 
     if modo_visualizacao == "info":
         linhas.append(("class:item", f" Nome: {item.name}\n"))
@@ -392,21 +402,21 @@ def gerar_preview():
         linhas.append(("class:item", f" Tipo: {'Pasta' if item.is_dir() else 'Arquivo'}\n"))
         if item.is_file():
             linhas.append(("class:item", f" Extensão: {item.suffix or '(nenhuma)'}\n"))
-        
+
         try:
             stat = item.stat()
             tamanho = formatar_tamanho(stat.st_size) if item.is_file() else "-"
             modificado = datetime.datetime.fromtimestamp(stat.st_mtime).strftime('%d/%m/%Y %H:%M:%S')
-            
+
             linhas.append(("class:item", f" Tamanho: {tamanho}\n"))
             linhas.append(("class:item", f" Modificado: {modificado}\n"))
-            
+
             if item.is_dir():
                 qtd = len(list(item.iterdir()))
                 linhas.append(("class:item", f" Itens na pasta: {qtd}\n"))
         except OSError:
             linhas.append(("class:empty", " [Erro ao ler atributos]\n"))
-            
+
         return linhas
 
     # Miniatura de imagem (renderizada com blocos RGB, compatível com terminais de texto modernos).
@@ -421,7 +431,7 @@ def gerar_preview():
                 linhas.append(("class:empty", "  Pasta vazia\n"))
             else:
                 for c in conteudo[:20]:
-                    icone = "📁" if c.is_dir() else "📄"
+                    icone = PASTA if c.is_dir() else ARQUIVO
                     linhas.append(("class:item", f"  {icone} {c.name}\n"))
                 if len(conteudo) > 20:
                     linhas.append(("class:empty", f"  ... e mais {len(conteudo)-20} itens\n"))
@@ -771,7 +781,7 @@ def executar_acao_input(event):
         else:
             try:
                 item.rename(destino)
-                definir_status(f"✓ Item renomeado")
+                definir_status("✓ Item renomeado")
                 atualizar_lista()
             except OSError as e:
                 definir_status(f"✗ Erro: {e}")
@@ -906,24 +916,26 @@ layout = Layout(
     ])
 )
 
-estilo = Style.from_dict({
-    "": "#ebdbb2 bg:#282828",
-    "header": "bg:#fe8019 fg:#1d2021 bold",
-    "path": "bg:#3c3836 fg:#ebdbb2 bold",
-    "border": "fg:#504945 bg:#282828",
-    "selected": "bg:#3c3836 fg:#fabd2f bold",
-    "item": "fg:#ebdbb2 bg:#282828",
-    "preview": "fg:#ebdbb2 bg:#282828",
-    "empty": "fg:#928374 bg:#282828 italic",
-    "footer": "bg:#1d2021 fg:#a89984 bold",
-    "status": "bg:#3c3836 fg:#b8bb26 bold",
-    "prompt": "bg:#fb4934 fg:#1d2021 bold",
-    "outline": "bg:#1d2021",
-    "outline.header": "fg:#fe8019 bg:#1d2021 bold",
-    "outline.help": "fg:#928374 bg:#1d2021",
-    "outline.selected": "bg:#3c3836 fg:#fabd2f bold",
-    "outline.item": "fg:#ebdbb2 bg:#1d2021",
-    "line-number.separator": "fg:#504945 bg:#282828",
+# Paleta: usa o jtheme.py (se estiver na mesma pasta); senão, o Tokyo Night embutido abaixo.
+_tema = getattr(jtheme, "estilo_jfiles", None)
+estilo = Style.from_dict(_tema() if _tema else {
+        "": "#c0caf5 bg:#1a1b26",
+        "header": "bg:#7aa2f7 fg:#16161e bold",
+        "path": "bg:#292e42 fg:#c0caf5 bold",
+        "border": "fg:#3b4261 bg:#1a1b26",
+        "selected": "bg:#292e42 fg:#e0af68 bold",
+        "item": "fg:#c0caf5 bg:#1a1b26",
+        "preview": "fg:#c0caf5 bg:#1a1b26",
+        "empty": "fg:#636da6 bg:#1a1b26 italic",
+        "footer": "bg:#16161e fg:#9aa5ce bold",
+        "status": "bg:#292e42 fg:#9ece6a bold",
+        "prompt": "bg:#f7768e fg:#16161e bold",
+        "outline": "bg:#16161e",
+        "outline.header": "fg:#7aa2f7 bg:#16161e bold",
+        "outline.help": "fg:#636da6 bg:#16161e",
+        "outline.selected": "bg:#292e42 fg:#e0af68 bold",
+        "outline.item": "fg:#c0caf5 bg:#16161e",
+        "line-number.separator": "fg:#3b4261 bg:#1a1b26",
 })
 
 
@@ -1016,7 +1028,7 @@ if __name__ == "__main__":
                                  stderr=subprocess.DEVNULL)
             else:
                 subprocess.run(cmd, check=False)
-        
+
         except OSError as erro:
             definir_status(
                 f"Erro ao abrir o JCode: {erro}"

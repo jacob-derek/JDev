@@ -47,19 +47,34 @@ FONT_MIN, FONT_MAX = 7, 32
 KEEP_OPEN_ON_ERROR = True  # se o processo sair com erro, mantém a janela para ler a mensagem
 
 # ── Tema Tokyo Night ─────────────────────────────────────────────────────────
-DEFAULT_FG = "#a9b1d6"
-DEFAULT_BG = "#1a1b26"
-SELECT_BG = "#33467c"
+try:  # paleta única do JDev; opcional: sem o jtheme.py ao lado vale o Tokyo Night embutido
+    from jtheme import (ACCENTS, BLUE as _BLUE, BORDER_IDLE, DESK_BG, FG as DEFAULT_FG, HEADER_FG_FOCUS,
+                        HEADER_FG_IDLE, PANE_BG as DEFAULT_BG, SELECT_BG)
+except ImportError:
+    DEFAULT_FG, DEFAULT_BG, SELECT_BG = "#a9b1d6", "#1a1b26", "#33467c"
+    DESK_BG = "#13141c"        # fundo do JDesk: aparece como o "espaço" entre os painéis
+    BORDER_IDLE, _BLUE = "#292e42", "#7aa2f7"
+    HEADER_FG_IDLE, HEADER_FG_FOCUS = "#6b7394", "#16161e"
+    # cor de cada painel: ponto no cabeçalho (inativo) e borda/cabeçalho (com foco)
+    ACCENTS = {"jfiles": "#7aa2f7", "jshell": "#9ece6a", "jcode": "#bb9af7", "jclass": "#e0af68"}
 PAD = 8
 DEFAULT_KEY = (DEFAULT_FG, DEFAULT_BG, False, False, False, False)
 
-COLOR_NAMES = {
-    "black": "#15161e", "red": "#f7768e", "green": "#9ece6a", "brown": "#e0af68",
-    "blue": "#7aa2f7", "magenta": "#bb9af7", "cyan": "#7dcfff", "white": "#a9b1d6",
-    "brightblack": "#565f89", "brightred": "#f7768e", "brightgreen": "#9ece6a",
-    "brightbrown": "#e0af68", "brightyellow": "#e0af68", "brightblue": "#7aa2f7",
-    "brightmagenta": "#bb9af7", "brightcyan": "#7dcfff", "brightwhite": "#c0caf5",
-}
+# A paleta ANSI precisa distinguir preto como TEXTO de preto como FUNDO:
+# usar #15161e para os dois tornava texto ANSI preto quase invisível no fundo #1a1b26.
+try:
+    from jtheme import ANSI_BLACK_BG, ANSI_BLACK_FG, COLOR_NAMES, LIGHT  # paleta ANSI vem do tema
+except ImportError:
+    LIGHT = False
+    ANSI_BLACK_FG = "#7b83a8"       # preto ANSI elevado para uma cor legível em texto
+    ANSI_BLACK_BG = "#15161e"       # preto real continua escuro quando usado como fundo
+    COLOR_NAMES = {
+        "black": ANSI_BLACK_BG, "red": "#f7768e", "green": "#9ece6a", "brown": "#e0af68",
+        "blue": "#7aa2f7", "magenta": "#bb9af7", "cyan": "#7dcfff", "white": "#a9b1d6",
+        "brightblack": "#7b83a8", "brightred": "#f7768e", "brightgreen": "#9ece6a",
+        "brightbrown": "#e0af68", "brightyellow": "#e0af68", "brightblue": "#7aa2f7",
+        "brightmagenta": "#bb9af7", "brightcyan": "#7dcfff", "brightwhite": "#c0caf5",
+    }
 HEX_RE = re.compile(r"[0-9a-fA-F]{6}")
 
 FONT_CANDIDATES = ["Cascadia Mono", "Consolas", "JetBrains Mono", "DejaVu Sans Mono",
@@ -95,7 +110,11 @@ PARTIAL_RE = re.compile(r"\x1b(?:\[(?:\?\d{0,4})?)?$")
 # ── Backends de PTY ──────────────────────────────────────────────────────────
 class UnixPty:
     def __init__(self, argv, rows, cols, env, cwd):
-        import fcntl, pty, struct, subprocess, termios
+        import fcntl
+        import pty
+        import struct
+        import subprocess
+        import termios
         self._fcntl, self._termios, self._struct = fcntl, termios, struct
         self.master, slave = pty.openpty()
         self.set_size(rows, cols)
@@ -234,10 +253,7 @@ class TermScreen(pyte.Screen):
 
 
 # ── Painel: um pty + emulador + widget (reutilizável em janela única ou no JDesk) ──
-BORDER_IDLE = "#292e42"
-BORDER_FOCUS = "#7aa2f7"
-HEADER_FG_IDLE = "#565f89"
-HEADER_FG_FOCUS = "#1a1b26"
+BORDER_FOCUS = _BLUE
 
 _family_cache = None
 
@@ -260,6 +276,12 @@ def enable_dpi_awareness():
                 ctypes.windll.user32.SetProcessDPIAware()
         except Exception:
             pass
+
+
+def _eh_emoji(c):
+    """Caracteres cuja fonte de fallback costuma ser mais alta que a fonte do terminal."""
+    o = ord(c)
+    return o >= 0x1F000 or 0x2600 <= o <= 0x27BF or 0x2B00 <= o <= 0x2BFF or o == 0xFE0F
 
 
 class PtyPane(tk.Frame):
@@ -286,6 +308,7 @@ class PtyPane(tk.Frame):
         self.key_filter = key_filter
         self.on_focus = on_focus
 
+        self.accent = ACCENTS.get(str(name).lower(), BORDER_FOCUS)
         self.font = font.Font(family=pick_family(), size=font_size)
         self.font_bold = self.font.copy()
         self.font_bold.configure(weight="bold")
@@ -293,13 +316,22 @@ class PtyPane(tk.Frame):
         self.font_italic.configure(slant="italic")
         self.font_bold_italic = self.font_bold.copy()
         self.font_bold_italic.configure(slant="italic")
+        self.lh_real = 0               # altura real (px) da maior linha com emoji já medida
+        self._medidas_estaveis = 0
+        self._remedir_job = None
         self.update_metrics()
 
         self.header = None
         if header:
-            self.header = tk.Label(self, text=f" {name.upper()} ", bg=BORDER_IDLE, fg=HEADER_FG_IDLE,
-                                   anchor="w", font=("TkDefaultFont", 9, "bold"), bd=0, pady=0)
-            self.header.pack(fill=tk.X)
+            self.header_bar = tk.Frame(self, bg=BORDER_IDLE, bd=0, highlightthickness=0)
+            self.header_bar.pack(fill=tk.X)
+            self.dot = tk.Label(self.header_bar, text=" \u25cf", bg=BORDER_IDLE, fg=self.accent,
+                                font=("TkDefaultFont", 9, "bold"), bd=0, pady=2)
+            self.dot.pack(side=tk.LEFT)
+            self.header = tk.Label(self.header_bar, text=f" {name.upper()} ", bg=BORDER_IDLE,
+                                   fg=HEADER_FG_IDLE, anchor="w", font=("TkDefaultFont", 9, "bold"),
+                                   bd=0, pady=2)
+            self.header.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
         self.text = tk.Text(
             self, bg=DEFAULT_BG, fg=DEFAULT_FG, font=self.font, wrap="none",
@@ -308,7 +340,7 @@ class PtyPane(tk.Frame):
             spacing1=0, spacing2=0, spacing3=0, cursor="xterm", undo=False,
         )
         if header:
-            self.text.pack(fill=tk.BOTH, expand=True, padx=1, pady=(0, 1))
+            self.text.pack(fill=tk.BOTH, expand=True, padx=2, pady=(0, 2))
         else:
             self.text.pack(fill=tk.BOTH, expand=True)
 
@@ -363,6 +395,7 @@ class PtyPane(tk.Frame):
         env = os.environ.copy()
         env.update({"TERM": "xterm-256color", "COLORTERM": "truecolor",
                     "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"})
+        env.setdefault("JICONES", "nerd")  # aqui emojis (acima de U+FFFF) não são confiáveis no Tk
         env.update(self.env_extra)
 
         q = self.queue = queue.Queue(maxsize=128)   # limite = contrapressão no processo
@@ -407,6 +440,13 @@ class PtyPane(tk.Frame):
         self.kill_process()
         self.start_process()
 
+    def encerrar(self):
+        """Mata o processo e deixa o painel parado, esperando Enter para reiniciar."""
+        if self.destroyed or self.dead or not self.started:
+            return
+        self.kill_process()
+        self.on_process_exit("encerrado")
+
     def shutdown(self):
         if self.destroyed:
             return
@@ -426,9 +466,11 @@ class PtyPane(tk.Frame):
             self.on_focus(self)
 
     def set_active(self, active):
-        bg = BORDER_FOCUS if active else BORDER_IDLE
+        bg = self.accent if active else BORDER_IDLE
         self.configure(bg=bg)
         if self.header:
+            self.header_bar.configure(bg=bg)
+            self.dot.configure(bg=bg, fg=HEADER_FG_FOCUS if active else self.accent)
             self.header.configure(bg=bg, fg=HEADER_FG_FOCUS if active else HEADER_FG_IDLE)
 
     def set_header(self, text):
@@ -452,7 +494,7 @@ class PtyPane(tk.Frame):
     def calc_size(self):
         w = self.text.winfo_width() - 2 * PAD
         h = self.text.winfo_height() - 2 * PAD
-        return max(5, h // self.lh), max(20, w // self.cw)
+        return max(5, h // max(self.lh, self.lh_real)), max(20, w // self.cw)
 
     def reset_text_lines(self):
         self.text.delete("1.0", "end")
@@ -492,6 +534,8 @@ class PtyPane(tk.Frame):
         for f in (self.font, self.font_bold, self.font_italic, self.font_bold_italic):
             f.configure(size=size)
         self.update_metrics()
+        self.lh_real = 0  # a fonte mudou: a altura real precisa ser medida de novo
+        self._medidas_estaveis = 0
         self.apply_resize(force=True)
 
     def set_title(self, title):
@@ -571,8 +615,11 @@ class PtyPane(tk.Frame):
             msg = f"[processo finalizado com código {code} — pressione Enter para fechar]"
         else:
             self.waiting_restart = True
-            msg = (f"[processo finalizado com código {code if code is not None else '?'} — "
-                   f"Enter reinicia]")
+            if isinstance(code, str):
+                msg = f"[processo {code} — Enter reinicia]"
+            else:
+                msg = (f"[processo finalizado com código {code if code is not None else '?'} — "
+                       f"Enter reinicia]")
         if self.alt_saved is not None:
             self.set_alt_screen(False)
         self.snap_bottom()
@@ -630,6 +677,10 @@ class PtyPane(tk.Frame):
     def clear_history(self):
         self.history.clear()
         self.offset = 0
+        # Uma limpeza de scrollback não deve deixar linhas antigas em cache na viewport.
+        self.line_cache.clear()
+        if hasattr(self, "screen"):
+            self.screen.dirty.update(range(self.screen.lines))
 
     def scroll_view(self, delta):
         new = max(0, min(len(self.history), self.offset + delta))
@@ -645,23 +696,32 @@ class PtyPane(tk.Frame):
             self.scroll_view(-self.offset)
 
     # ── renderização ──
-    def color(self, c, default):
-        r = self.color_cache.get((c, default))
+    def color(self, c, default, foreground=False):
+        cache_key = (c, default, foreground)
+        r = self.color_cache.get(cache_key)
         if r is None:
+            hex_value = c[1:] if isinstance(c, str) and c.startswith("#") else c
+            near_black = False
+            if isinstance(hex_value, str) and HEX_RE.fullmatch(hex_value):
+                rgb = int(hex_value, 16)
+                near_black = max((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255) <= 0x25
             if c == "default":
                 r = default
+            elif foreground and not LIGHT and (c == "black" or near_black):
+                # ANSI black e truecolor quase preto ficam legíveis como texto (só em tema escuro).
+                r = ANSI_BLACK_FG
             elif c in COLOR_NAMES:
                 r = COLOR_NAMES[c]
-            elif HEX_RE.fullmatch(c):
-                r = "#" + c
+            elif isinstance(hex_value, str) and HEX_RE.fullmatch(hex_value):
+                r = "#" + hex_value
             else:
                 r = default
-            self.color_cache[(c, default)] = r
+            self.color_cache[cache_key] = r
         return r
 
     def compute_key(self, ch, is_cursor):
-        fg = self.color(ch.fg, DEFAULT_FG)
-        bg = self.color(ch.bg, DEFAULT_BG)
+        fg = self.color(ch.fg, DEFAULT_FG, foreground=True)
+        bg = self.color(ch.bg, DEFAULT_BG, foreground=False)
         if ch.reverse != is_cursor:  # XOR: reverse do app e/ou cursor
             fg, bg = bg, fg
         return (fg, bg, bool(ch.bold), bool(ch.italics),
@@ -731,6 +791,34 @@ class PtyPane(tk.Frame):
                 args.append(chunk)
                 args.append(self.tag_for(key))
             self.text.insert(f"{y + 1}.0", *args)  # uma única chamada Tcl por linha
+            self._medir_linha(y, runs)
+
+    def _medir_linha(self, y, runs):
+        """O Tk deixa a linha mais alta quando ela tem um glifo de fonte de fallback (emoji).
+        Se o terminal assumisse a altura da fonte base, as últimas linhas ficariam cortadas
+        (e isso varia com o zoom). Medimos a altura real e recalculamos as linhas que cabem."""
+        if not self.visible or self._medidas_estaveis >= 8:
+            return
+        if not any(_eh_emoji(c) for _, t in runs for c in t):
+            return
+        try:
+            info = self.text.dlineinfo(f"{y + 1}.0")
+        except tk.TclError:
+            return
+        if not info:
+            return
+        h, base = info[3], max(self.lh, self.lh_real)
+        if base < h <= base * 2:
+            self.lh_real, self._medidas_estaveis = h, 0
+            if self._remedir_job is None:
+                self._remedir_job = self.after(30, self._reaplicar)
+        else:
+            self._medidas_estaveis += 1
+
+    def _reaplicar(self):
+        self._remedir_job = None
+        if not self.destroyed:
+            self.apply_resize(force=True)
 
     def safe_render(self):
         try:
@@ -748,6 +836,9 @@ class PtyPane(tk.Frame):
         if self.destroyed:
             return
         s = self.screen
+        # Tk apaga o tag nativo "sel" quando uma linha selecionada é redesenhada.
+        # Guardamos os índices e aplicamos a seleção de volta após atualizar as linhas.
+        selection = tuple(self.text.tag_ranges("sel"))
         if len(self.tags) > MAX_TAGS:
             self.flush_tags()
 
@@ -772,6 +863,13 @@ class PtyPane(tk.Frame):
                 if 0 <= y < s.lines:
                     self.draw_runs(y, self.live_runs(y))
 
+        if selection:
+            try:
+                self.text.tag_remove("sel", "1.0", "end")
+                for i in range(0, len(selection), 2):
+                    self.text.tag_add("sel", selection[i], selection[i + 1])
+            except tk.TclError:
+                pass
         if self.text.yview()[0] != 0.0:  # o Text nunca deve rolar sozinho
             self.text.yview_moveto(0)
 

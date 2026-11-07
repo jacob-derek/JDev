@@ -11,6 +11,7 @@ JBar - barra superior do JDesk (Fase 2).
 
 Roda sozinho para teste:  python JBar.py
 """
+import json
 import locale
 import os
 import re
@@ -25,16 +26,18 @@ from tkinter import font
 IS_WINDOWS = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
 
-# Tokyo Night
-BAR_BG = "#16161e"
-FG = "#a9b1d6"
-DIM = "#565f89"
-BLUE = "#7aa2f7"
-GREEN = "#9ece6a"
-YELLOW = "#e0af68"
-RED = "#f7768e"
-CYAN = "#7dcfff"
-DARK = "#1a1b26"
+# Paleta e medidas vêm do jtheme (uma única fonte para JWM, JBar, JTerm e JDesk)
+try:  # opcional: sem o jtheme.py ao lado vale o Tokyo Night embutido
+    from jtheme import (BAR_H, DARK, DESK_BG, DIM, FG, FOCUS, GAP, GREEN, BLUE, CYAN, RED, YELLOW, LINE,
+                        MODE, ON_ACCENT, PILL_BG, PILL_H, PILL_HOVER)
+except ImportError:
+    BAR_H, PILL_H, GAP = 36, 28, 8
+    DESK_BG, PILL_BG, PILL_HOVER, LINE = "#13141c", "#1f2335", "#2a2f45", "#292e42"
+    FG, DIM, DARK, ON_ACCENT = "#a9b1d6", "#565f89", "#16161e", "#fbe9ef"
+    FOCUS, MODE = "#b04a67", "#9ece6a"
+    GREEN, BLUE, CYAN, RED, YELLOW = "#9ece6a", "#7aa2f7", "#7dcfff", "#f7768e", "#e0af68"
+BAR_BG = DESK_BG   # o "vazio" entre as pílulas tem a cor do fundo do JDesk: parece transparente
+HOVER = PILL_HOVER
 
 INTERVAL = 1.5  # segundos entre coletas
 VOLUME_STEP = 5  # percentual por movimento do scroll
@@ -106,6 +109,16 @@ def toggle_mute():
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0, check=False)
     except (OSError, subprocess.SubprocessError):
         pass
+
+
+def brilho(delta):
+    """Brilho da tela +5% / -5% (brightnessctl, como no sway antigo). Sem ele, não faz nada."""
+    if shutil.which("brightnessctl"):
+        try:
+            subprocess.run(["brightnessctl", "set", "5%+" if delta > 0 else "5%-"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0, check=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
 
 
 def em_thread(fn, *args):
@@ -245,13 +258,48 @@ def level_color(pct, warn=65, crit=85):
     return GREEN
 
 
-# ── Barra ────────────────────────────────────────────────────────────────────
-class StatusBar(tk.Frame):
-    HEIGHT = 26
+BLOCOS = "▁▂▃▄▅▆▇█"
 
-    def __init__(self, parent, n_ws, on_select):
+
+def barra(pct):
+    """Mini gráfico de uma célula (8 níveis)."""
+    if pct is None:
+        return "·"
+    return BLOCOS[max(0, min(7, int(pct / 12.5)))]
+
+
+def pct_txt(v):
+    return "--" if v is None else f"{v:.0f}%"
+
+
+# ── Barra ────────────────────────────────────────────────────────────────────
+def _estado_path():
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
+    return os.path.join(base, "jwm-state.json")
+
+
+def _pid_vivo(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+class StatusBar(tk.Canvas):
+    """Barra em pílulas: onde há conteúdo, uma cápsula arredondada; entre elas, o fundo do JDesk.
+
+    Fica numa faixa RESERVADA no rodapé (o JWM tira essa altura da área das janelas), então nunca
+    cobre o que você está escrevendo. O JWM escreve ~/.cache/jwm-state.json (modo, divisão pendente,
+    título da janela ativa, barra visível ou não) e a barra só LÊ esse arquivo.
+    """
+    HEIGHT = BAR_H
+    COMPACT_W = 1100  # abaixo disso (ex.: monitor em pé) somem NET, data e título
+    TAB_W = 26
+    PAD = 10
+
+    def __init__(self, parent, n_ws, on_select, on_visibilidade=None):
         super().__init__(parent, bg=BAR_BG, height=self.HEIGHT, bd=0, highlightthickness=0)
-        self.pack_propagate(False)
         try:
             locale.setlocale(locale.LC_TIME, "")  # dia/mês no idioma do sistema
         except locale.Error:
@@ -259,38 +307,30 @@ class StatusBar(tk.Frame):
         self.font = font.Font(family=self._family(), size=10)
         self.font_bold = self.font.copy()
         self.font_bold.configure(weight="bold")
+        self.n_ws = n_ws
+        self.on_select = on_select
+        self.on_visibilidade = on_visibilidade
         self.metrics = None
         self.job = None
+        self.job_estado = None
+        self.current = 0
+        self.created = set()
+        self.modo = ""            # modo do próprio JDesk (resize de painéis)
+        self.dados = {}           # último snapshot das métricas
+        self.estado = {}          # conteúdo do jwm-state.json
+        self._estado_mtime = None
+        self._visivel = True
+        self._hover = None
+        self._hits = []           # (x1, x2, nome, dado) da última renderização
+        self._sig = None
 
-        # workspaces (esquerda)
-        left = tk.Frame(self, bg=BAR_BG)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(6, 0))
-        self.tabs = []
-        for i in range(n_ws):
-            lb = tk.Label(left, text=f" {i + 1} ", bg=BAR_BG, fg=DIM, font=self.font, bd=0, cursor="hand2")
-            lb.pack(side=tk.LEFT, fill=tk.Y, padx=1)
-            lb.bind("<Button-1>", lambda e, i=i: on_select(i))
-            self.tabs.append(lb)
-
-        # métricas (direita)
-        right = tk.Frame(self, bg=BAR_BG)
-        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 8))
-        self.lb = {}
-        for key in ("vol", "ram", "net", "cpu"):
-            lb = tk.Label(right, text="", bg=BAR_BG, fg=DIM, font=self.font, bd=0)
-            lb.pack(side=tk.LEFT, padx=7)
-            self.lb[key] = lb
-
-        # O scroll só altera o volume quando o ponteiro está sobre VOL.
-        self.lb["vol"].configure(cursor="hand2")
-        self.lb["vol"].bind("<Button-4>", lambda e: self._volume_scroll(+1))
-        self.lb["vol"].bind("<Button-5>", lambda e: self._volume_scroll(-1))
-        self.lb["vol"].bind("<MouseWheel>", self._volume_mousewheel)
-        self.lb["vol"].bind("<Button-1>", lambda e: (em_thread(toggle_mute), "break")[1])  # clique = mudo
-
-        # relógio (centro de verdade, independente da largura dos lados)
-        self.clock = tk.Label(self, text="", bg=BAR_BG, fg=FG, font=self.font_bold, bd=0)
-        self.clock.place(relx=0.5, rely=0.5, anchor="center")
+        self.bind("<Configure>", lambda e: self._render(force=True))
+        self.bind("<Motion>", self._on_motion)
+        self.bind("<Leave>", lambda e: self._set_hover(None))
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Button-4>", lambda e: self._on_scroll(e, +1))
+        self.bind("<Button-5>", lambda e: self._on_scroll(e, -1))
+        self.bind("<MouseWheel>", lambda e: self._on_scroll(e, 1 if e.delta > 0 else -1))
 
     @staticmethod
     def _family():
@@ -302,57 +342,231 @@ class StatusBar(tk.Frame):
 
     # ── API ──
     def set_workspaces(self, current, created):
-        for i, lb in enumerate(self.tabs):
-            if i == current:
-                lb.configure(bg=BLUE, fg=DARK, font=self.font_bold)
-            elif i in created:
-                lb.configure(bg=BAR_BG, fg=FG, font=self.font)
-            else:
-                lb.configure(bg=BAR_BG, fg=DIM, font=self.font)
+        self.current, self.created = current, set(created)
+        self._render()
+
+    def set_modo(self, texto):
+        self.modo = texto or ""
+        self._render()
 
     def start(self, metrics):
         self.metrics = metrics
         self.refresh()
+        self.poll_estado()
 
     def stop(self):
-        if self.job:
+        for attr in ("job", "job_estado"):
+            job = getattr(self, attr)
+            if job:
+                try:
+                    self.after_cancel(job)
+                except tk.TclError:
+                    pass
+                setattr(self, attr, None)
+
+    # ── estado escrito pelo JWM ──
+    def poll_estado(self):
+        try:
+            path = _estado_path()
             try:
-                self.after_cancel(self.job)
-            except tk.TclError:
-                pass
-            self.job = None
+                mtime = os.stat(path).st_mtime_ns
+            except OSError:
+                mtime = None
+            if mtime != self._estado_mtime:
+                self._estado_mtime = mtime
+                novo = {}
+                if mtime is not None:
+                    try:
+                        with open(path, encoding="utf-8") as f:
+                            lido = json.load(f)
+                        if _pid_vivo(lido.get("pid")):   # arquivo velho de outra sessão é ignorado
+                            novo = lido
+                    except (OSError, ValueError):
+                        novo = {}
+                self.estado = novo
+                visivel = bool(novo.get("bar", True))
+                if visivel != self._visivel:
+                    self._visivel = visivel
+                    if self.on_visibilidade:
+                        self.on_visibilidade(visivel)
+                self._render()
+        except tk.TclError:
+            return
+        self.job_estado = self.after(250, self.poll_estado)
 
-    def _volume_scroll(self, direction):
-        em_thread(adjust_volume, direction)
-        return "break"
+    # ── desenho ──
+    def _medir(self, segs):
+        return sum(self.font_bold.measure(t) if b else self.font.measure(t) for t, _c, b in segs)
 
-    def _volume_mousewheel(self, event):
-        if event.delta == 0:
-            return "break"
-        return self._volume_scroll(+1 if event.delta > 0 else -1)
+    def _capsula(self, x1, x2, y1, y2, cor):
+        r = (y2 - y1) / 2
+        pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2,
+               x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+        self.create_polygon(pts, smooth=True, fill=cor, outline="")
+
+    def _texto(self, x, cy, segs):
+        for t, cor, bold in segs:
+            self.create_text(x, cy, text=t, fill=cor, font=self.font_bold if bold else self.font, anchor="w")
+            x += self.font_bold.measure(t) if bold else self.font.measure(t)
+        return x
+
+    def _pilula(self, x, y1, y2, segs, bg=PILL_BG, nome=None, dado=None, hover_bg=None):
+        w = self._medir(segs) + 2 * self.PAD
+        if nome:
+            self._hits.append((x, x + w, nome, dado))
+        self._capsula(x, x + w, y1, y2, hover_bg if (hover_bg and self._hover == (nome, dado)) else bg)
+        self._texto(x + self.PAD, (y1 + y2) / 2, segs)
+        return w
+
+    def _elidir(self, texto, largura):
+        if largura <= 0:
+            return ""
+        if self.font.measure(texto) <= largura:
+            return texto
+        while texto and self.font.measure(texto + "…") > largura:
+            texto = texto[:-1]
+        return texto.rstrip() + "…" if texto else ""
+
+    def _render(self, force=False):
+        try:
+            W = self.winfo_width()
+        except tk.TclError:
+            return
+        if W <= 1:
+            return
+        d, est = self.dados, self.estado
+        compact = W < self.COMPACT_W
+        data, hora = time.strftime("%a %d %b|%H:%M").lower().split("|")
+        vol, muted = d.get("vol"), d.get("muted")
+        if vol is None:
+            vseg = [("VOL ", DIM, False), ("--", DIM, False)]
+        elif muted:
+            vseg = [("VOL ", DIM, False), ("mudo", RED, False)]
+        else:
+            vseg = [("VOL ", DIM, False), (f"{vol}%", CYAN, False)]
+        right = [("vol", vseg)]
+        for key, nome in (("ram", "RAM"), ("net", "NET"), ("cpu", "CPU")):
+            if key == "net":
+                if compact:
+                    continue
+                dn, up = d.get("down"), d.get("up")
+                right.append((key, [("NET ", DIM, False),
+                                    (f"↓{fmt_rate(dn):>5}", GREEN if dn is not None else DIM, False),
+                                    (" ", DIM, False),
+                                    (f"↑{fmt_rate(up):>5}", BLUE if up is not None else DIM, False)]))
+            else:
+                v = d.get(key)
+                right.append((key, [(f"{nome} ", DIM, False),
+                                    (f"{barra(v)} {pct_txt(v):>4}", level_color(v), False)]))
+        clock = ([] if compact else [(data + "  ", DIM, False)]) + [(hora, FG, True)]
+        modo_wm = est.get("mode")
+        split = est.get("split")
+        titulo = "" if compact else (est.get("title") or "")
+        sig = (W, self.current, tuple(sorted(self.created)), self.modo, modo_wm, split, titulo, self._hover,
+               tuple(tuple(s) for _k, s in right), tuple(clock))
+        if not force and sig == self._sig:
+            return
+        self._sig = sig
+
+        self.delete("all")
+        self._hits = []
+        y1 = (self.HEIGHT - PILL_H) // 2
+        y2 = y1 + PILL_H
+        cy = (y1 + y2) / 2
+
+        # ── esquerda: workspaces (+ modos) ──
+        x = GAP
+        wsw = self.n_ws * self.TAB_W + 8
+        self._capsula(x, x + wsw, y1, y2, PILL_BG)
+        for i in range(self.n_ws):
+            tx1 = x + 4 + i * self.TAB_W
+            tx2 = tx1 + self.TAB_W
+            if i == self.current:
+                self._capsula(tx1 + 1, tx2 - 1, y1 + 3, y2 - 3, FOCUS)
+                cor = ON_ACCENT
+            elif self._hover == ("tab", i):
+                self._capsula(tx1 + 1, tx2 - 1, y1 + 3, y2 - 3, PILL_HOVER)
+                cor = FG
+            else:
+                cor = FG if i in self.created else DIM
+            self.create_text((tx1 + tx2) / 2, cy, text=str(i + 1), fill=cor, font=self.font_bold)
+            self._hits.append((tx1, tx2, "tab", i))
+        x += wsw + GAP
+
+        if modo_wm:
+            x += self._pilula(x, y1, y2, [(f" {modo_wm.upper()} ", DARK, True)], bg=MODE) + GAP
+        if self.modo:
+            x += self._pilula(x, y1, y2, [(f" {self.modo} ", DARK, True)], bg=YELLOW) + GAP
+        if split:
+            x += self._pilula(x, y1, y2, [("split ", DIM, False), (split, YELLOW, True)]) + GAP
+        esquerda_fim = x
+
+        # ── direita: métricas, da ponta para dentro ──
+        x = W - GAP
+        for key, segs in reversed(right):
+            w = self._medir(segs) + 2 * self.PAD
+            x -= w
+            self._hits.append((x, x + w, key, None))
+            self._capsula(x, x + w, y1, y2, PILL_HOVER if (key == "vol" and self._hover == ("vol", None)) else PILL_BG)
+            self._texto(x + self.PAD, cy, segs)
+            x -= GAP
+        direita_ini = x + GAP
+
+        # ── centro: relógio ──
+        cw = self._medir(clock) + 2 * self.PAD
+        cx = (W - cw) // 2
+        if cx < esquerda_fim:               # sem espaço: encosta no que vem depois da esquerda
+            cx = esquerda_fim
+        if cx + cw <= direita_ini - GAP:
+            self._capsula(cx, cx + cw, y1, y2, PILL_BG)
+            self._texto(cx + self.PAD, cy, clock)
+            relogio_ini = cx
+        else:
+            relogio_ini = direita_ini
+
+        # ── título da janela ativa: entre os modos e o relógio ──
+        if titulo:
+            disp = relogio_ini - GAP - esquerda_fim - 2 * self.PAD
+            txt = self._elidir(titulo, disp)
+            if txt and disp > 40:
+                self._pilula(esquerda_fim, y1, y2, [(txt, FG, False)])
+
+    # ── mouse ──
+    def _hit_em(self, x):
+        for x1, x2, nome, dado in self._hits:
+            if x1 <= x <= x2:
+                return nome, dado
+        return None
+
+    def _set_hover(self, h):
+        if h != self._hover:
+            self._hover = h
+            self.configure(cursor="hand2" if h else "")
+            self._render()
+
+    def _on_motion(self, e):
+        h = self._hit_em(e.x)
+        self._set_hover(h if h and h[0] in ("tab", "vol") else None)
+
+    def _on_click(self, e):
+        h = self._hit_em(e.x)
+        if not h:
+            return
+        if h[0] == "tab":
+            self.on_select(h[1])
+        elif h[0] == "vol":
+            em_thread(toggle_mute)
+
+    def _on_scroll(self, e, direcao):
+        h = self._hit_em(e.x)
+        if h and h[0] == "vol":
+            em_thread(adjust_volume, direcao)
 
     # ── atualização (só lê o snapshot; nada bloqueante aqui) ──
     def refresh(self):
         try:
-            self.clock.configure(text=time.strftime("%a %d %b  %H:%M").lower())
-            d = self.metrics.snapshot() if self.metrics else {}
-
-            vol, muted = d.get("vol"), d.get("muted")
-            if vol is None:
-                self.lb["vol"].configure(text="VOL --", fg=DIM)
-            elif muted:
-                self.lb["vol"].configure(text="VOL mudo", fg=RED)
-            else:
-                self.lb["vol"].configure(text=f"VOL {vol}%", fg=CYAN)
-
-            ram, cpu = d.get("ram"), d.get("cpu")
-            self.lb["ram"].configure(text="RAM --" if ram is None else f"RAM {ram:.0f}%",
-                                     fg=level_color(ram))
-            self.lb["cpu"].configure(text="CPU --" if cpu is None else f"CPU {cpu:.0f}%",
-                                     fg=level_color(cpu))
-            down, up = d.get("down"), d.get("up")
-            self.lb["net"].configure(text=f"NET ↓{fmt_rate(down):>5} ↑{fmt_rate(up):>5}",
-                                     fg=FG if down is not None else DIM)
+            self.dados = self.metrics.snapshot() if self.metrics else {}
+            self._render()
         except tk.TclError:
             return
         self.job = self.after(1000, self.refresh)

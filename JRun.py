@@ -6,10 +6,10 @@ import subprocess
 import tkinter as tk
 from tkinter import messagebox
 
-BG = "#1a1b26"
-FG = "#c0caf5"
-BLUE = "#7aa2f7"
-DIM = "#565f89"
+try:  # cores do tema (jtheme.py); sem ele ao lado vale o Tokyo Night embutido
+    from jtheme import DIM, PANE_BG as BG, FG, BLUE, PILL_HOVER
+except ImportError:
+    BG, FG, BLUE, DIM, PILL_HOVER = "#1a1b26", "#c0caf5", "#7aa2f7", "#565f89", "#24283b"
 
 
 def main():
@@ -26,7 +26,7 @@ def main():
 
     tk.Label(root, text="JRUN  /  EXECUTAR COMANDO", anchor="w", bg=BG, fg=BLUE,
              font=("monospace", 10, "bold")).pack(fill="x", padx=14, pady=(10, 4))
-    entry = tk.Entry(root, bg="#24283b", fg=FG, insertbackground=FG, relief="flat",
+    entry = tk.Entry(root, bg=PILL_HOVER, fg=FG, insertbackground=FG, relief="flat",
                      font=("monospace", 12), highlightthickness=1,
                      highlightbackground=DIM, highlightcolor=BLUE)
     entry.pack(fill="x", padx=14, pady=(0, 12), ipady=5)

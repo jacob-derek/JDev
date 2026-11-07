@@ -1,10 +1,20 @@
-pyte
-psutil
-# Windows apenas:
+# JDev: dependências do núcleo (JWM, JDesk, JTerm, JBar, JCode, JShell, JFiles, JRun).
+# Instalar:  pip install -r requirements.txt     (Python 3.10 ou mais novo)
+# Tk (tkinter) vem do sistema, não do pip: no Void, `xbps-install python3-tkinter`.
+
+pyte                # emulador de terminal do JTerm
+prompt_toolkit      # JCode, JShell e JFiles
+pygments            # realce de sintaxe do JCode
+
+# Linux
+python-xlib; sys_platform == 'linux'     # JWM
+
+# Recomendadas (o JDev funciona sem elas, só perde um recurso)
+psutil              # CPU, RAM e rede na JBar
+pillow              # prévia de imagens no JFiles
+pyperclip           # copiar/colar do sistema no JCode
+
+# Windows apenas
 pywinpty; sys_platform == 'win32'
 pycaw; sys_platform == 'win32'
 comtypes; sys_platform == 'win32'
-# JClass:
-google-api-python-client
-google-auth-oauthlib
-prompt_toolkit

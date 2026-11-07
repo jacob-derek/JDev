@@ -2,7 +2,7 @@
 """JWM — um window manager X11 minimalista para o ecossistema J.
 
 - JDesk é tratado como desktop de fundo, sem decoração e sempre atrás.
-- Janelas normais usam layout master/stack, com modo flutuante opcional.
+- Janelas normais usam mosaico em árvore (divisões h/v, estilo Sway), com modo flutuante opcional.
 - Alt fica reservado ao JDesk/JTerm; os atalhos globais usam Super (tecla Windows).
 
 Este é um WM X11 real: não roda dentro de Sway/Wayland nem junto de outro WM.
@@ -10,10 +10,11 @@ Este é um WM X11 real: não roda dentro de Sway/Wayland nem junto de outro WM.
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import re
-import shlex
+import select
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,14 @@ except ImportError as exc:
     raise SystemExit(2) from exc
 
 APP_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(APP_DIR))
+from jtile import Arvore, vizinho  # noqa: E402  (mosaico em árvore)
+try:  # paleta compartilhada (opcional): sem o jtheme.py ao lado vale o Tokyo Night embutido
+    import jtheme as _T  # noqa: E402
+except ImportError:
+    from types import SimpleNamespace as _NS
+    _T = _NS(PANE_BG="#1a1b26", BORDER="#56566e", FOCUS="#b04a67", FLOAT="#e0af68", MODE="#9ece6a",
+             GAP=8, BAR_H=36)
 LOG_PATH = Path.home() / ".cache" / "jwm.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
@@ -40,21 +49,32 @@ logging.basicConfig(
 )
 log = logging.getLogger("JWM")
 
-# Tokyo Night-inspired, deliberately simple: no shadows, no animations, no compositor.
-COLOR_BG = "#1a1b26"
-COLOR_BORDER = "#565f89"
-COLOR_FOCUS = "#7aa2f7"
-COLOR_FLOAT = "#e0af68"
-BORDER = 3
-GAP = 4
-JDESK_BAR = 28  # deixa a barra do JDesk visível mesmo quando há apps por cima
+# Paleta e medidas vêm do jtheme (a mesma da JBar, do JTerm e do JDesk).
+# Tokyo Night-inspired, simples: sem sombras nem animações aqui; isso é com o picom.
+COLOR_BG = _T.PANE_BG
+COLOR_BORDER = _T.BORDER
+COLOR_FOCUS = _T.FOCUS
+COLOR_FLOAT = _T.FLOAT
+COLOR_MODE = _T.MODE     # borda da janela ativa enquanto o modo resize está ligado
+BORDER = 2
+
+GAP = _T.GAP         # espaço entre janelas em mosaico
+OUTER = _T.GAP       # espaço entre o mosaico e a borda do monitor
+PORTRAIT_ROWS = True  # monitor em pé (altura > largura): janelas empilhadas em linhas, não lado a lado
+JDESK_BAR = _T.BAR_H  # faixa da barra do JDesk, no RODAPÉ do monitor primário (Super+Shift+B esconde)
+STATE_PATH = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "jwm-state.json"
 MIN_W = 180
 MIN_H = 100
-DEFAULT_MASTER_RATIO = 0.56
+DEFAULT_MASTER_RATIO = 0.80
 RATIO_STEP = 0.04
 WEIGHT_STEP = 0.12
-MOVE_STEP = 24
-RESIZE_STEP = 24
+MOVE_STEP = 10
+RESIZE_STEP = 20
+HOTPLUG_POLL = 2.0   # s entre checagens de monitores ligados/desligados
+LAYOUT_SCRIPT = APP_DIR / "jwm-layout"
+# Padrão: foco por teclado/clique, nunca só por passar o ponteiro.
+# Para reativar o comportamento antigo: JWM_FOCUS_FOLLOWS_MOUSE=1.
+FOCUS_FOLLOWS_MOUSE = os.environ.get("JWM_FOCUS_FOLLOWS_MOUSE", "0").strip().lower() in {"1", "yes", "true", "on"}
 
 
 @dataclass
@@ -76,7 +96,9 @@ class Client:
 @dataclass
 class Workspace:
     clients: list[int] = field(default_factory=list)
-    master_ratio: float = DEFAULT_MASTER_RATIO
+    master_ratio: float = DEFAULT_MASTER_RATIO   # (legado; o mosaico em árvore guarda a proporção em cada divisão)
+    trees: dict = field(default_factory=dict)    # monitor -> Arvore
+    next_orient: Optional[str] = None            # "h"/"v": como a PRÓXIMA janela divide (Super+B / Super+V)
 
 
 class JWM:
@@ -91,16 +113,24 @@ class JWM:
         self.height = self.screen.height_in_pixels
         self.monitors: list[tuple[int, int, int, int]] = [(0, 0, self.width, self.height)]
         self.active_monitor = 0
+        self.desk_monitor = 0   # índice do monitor primário: onde mora o JDesk
+        self._outputs_sig: Optional[tuple] = None
+        self._pending_sig: Optional[tuple] = None
+        self._layout_proc: Optional[subprocess.Popen] = None
         self.clients: dict[int, Client] = {}
         self.workspaces = [Workspace() for _ in range(4)]
         self.current_ws = 0
         self.active: Optional[int] = None
+        self.mru: list[int] = []  # ids por recência de foco (a mais recente por último)
         self.desktop_id: Optional[int] = None
         self.ignored_unmaps: dict[int, int] = {}
         self.running = True
         self.drag: Optional[dict] = None
         self.desktop_proc: Optional[subprocess.Popen] = None
         self.key_names: dict[int, str] = {}
+        self.mode: Optional[str] = None   # None | "resize"
+        self.bar_visible = True           # faixa da JBar reservada no rodapé?
+        self._state_json = ""
         self.start_jdesk = jdesk
         self.lock_masks = (0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask)
         self.a = {name: self.dpy.intern_atom(name) for name in (
@@ -116,12 +146,14 @@ class JWM:
         self.pix_focus = self._color(COLOR_FOCUS)
         self.pix_border = self._color(COLOR_BORDER)
         self.pix_float = self._color(COLOR_FLOAT)
+        self.pix_mode = self._color(COLOR_MODE)
         self.pix_bg = self._color(COLOR_BG)
         self._claim_root()
         self._setup_ewmh()
         self._grab_keys()
         self._refresh_size()
         self._refresh_monitors()
+        self._outputs_sig = self._connected_signature()
         self._scan_existing_windows()
         if self.start_jdesk:
             self._start_desktop()
@@ -196,8 +228,11 @@ class JWM:
             pass
 
     def _refresh_monitors(self) -> None:
-        """Lê os retângulos físicos do xrandr; fallback para o desktop X11 inteiro."""
+        """Lê os retângulos físicos do xrandr; fallback para o desktop X11 inteiro.
+
+        O monitor "primário" do xrandr é onde o JDesk fica; sem primário, o mais à esquerda."""
         found: list[tuple[int, int, int, int]] = []
+        primary: Optional[tuple[int, int, int, int]] = None
         try:
             result = subprocess.run(
                 ["xrandr", "--query"], capture_output=True, text=True,
@@ -205,26 +240,87 @@ class JWM:
             )
             if result.returncode == 0:
                 pattern = re.compile(
-                    r"^\s*(\S+)\s+connected(?:\s+primary)?\s+"
+                    r"^\s*(\S+)\s+connected(\s+primary)?\s+"
                     r"(\d+)x(\d+)([+-]\d+)([+-]\d+)"
                 )
                 for line in result.stdout.splitlines():
                     match = pattern.match(line)
                     if not match:
                         continue
-                    _, width, height, x, y = match.groups()
+                    _, prim, width, height, x, y = match.groups()
                     rect = (int(x), int(y), int(width), int(height))
                     if rect not in found:
                         found.append(rect)
+                    if prim:
+                        primary = rect
         except (OSError, subprocess.SubprocessError):
             log.debug("Não foi possível consultar os monitores com xrandr", exc_info=True)
         if not found:
             found = [(0, 0, self.width, self.height)]
         self.monitors = sorted(found, key=lambda r: (r[0], r[1]))
+        self.desk_monitor = self.monitors.index(primary) if primary in self.monitors else 0
         self.active_monitor = max(0, min(self.active_monitor, len(self.monitors) - 1))
         for c in self.clients.values():
             x, y, w, h = c.geom
             c.monitor = self._monitor_for_point(x + w // 2, y + h // 2)
+
+    def _connected_signature(self) -> Optional[tuple]:
+        """Nomes das saídas com monitor conectado (para detectar ligar/desligar)."""
+        try:
+            result = subprocess.run(["xrandr", "--query"], capture_output=True, text=True,
+                                    timeout=1.5, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        return tuple(sorted(re.findall(r"^(\S+) connected", result.stdout, re.M)))
+
+    def _place_desktop(self) -> None:
+        """JDesk sempre cobre o monitor primário (e só ele)."""
+        if not self.desktop_id:
+            return
+        try:
+            mx, my, mw, mh = self._monitor_rect(self.desk_monitor)
+            self.dpy.create_resource_object("window", self.desktop_id).configure(
+                x=mx, y=my, width=mw, height=mh, border_width=0, stack_mode=X.Below)
+        except error.BadWindow:
+            self.desktop_id = None
+
+    def _poll_outputs(self) -> None:
+        """Ligou/desligou um monitor? Reaplica o layout (jwm-layout) e reorganiza as janelas."""
+        proc = self._layout_proc
+        if proc is not None:
+            if proc.poll() is None:
+                return
+            self._layout_proc = None
+            self._outputs_sig = self._connected_signature()
+            self._pending_sig = None
+            self._after_layout()
+            return
+        sig = self._connected_signature()
+        if sig is None or not LAYOUT_SCRIPT.is_file():
+            return
+        if self._outputs_sig is None or sig == self._outputs_sig:
+            self._outputs_sig, self._pending_sig = (self._outputs_sig or sig), None
+            return
+        if sig != self._pending_sig:  # exige duas leituras iguais: o monitor oscila ao ligar
+            self._pending_sig = sig
+            return
+        log.info("Monitores mudaram: %s -> %s; reaplicando layout", self._outputs_sig, sig)
+        try:
+            self._layout_proc = subprocess.Popen(
+                ["sh", str(LAYOUT_SCRIPT)], stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            log.exception("Não foi possível executar %s", LAYOUT_SCRIPT)
+            self._outputs_sig = sig
+            self._pending_sig = None
+
+    def _after_layout(self) -> None:
+        self._refresh_size()
+        self._refresh_monitors()
+        self._place_desktop()
+        self.arrange()
 
     def _monitor_rect(self, index: Optional[int] = None) -> tuple[int, int, int, int]:
         if not self.monitors:
@@ -233,6 +329,35 @@ class JWM:
             index = self.active_monitor
         index = max(0, min(int(index), len(self.monitors) - 1))
         return self.monitors[index]
+
+    def _bar_bottom(self, monitor_index: int) -> int:
+        """Altura reservada no RODAPÉ pela barra do JDesk; só existe no monitor primário e some com Super+Shift+B."""
+        if self.bar_visible and self.desktop_id is not None and monitor_index == self.desk_monitor:
+            return JDESK_BAR
+        return 0
+
+    def _write_state(self) -> None:
+        """Publica o estado do WM para a JBar (que só lê). Escrita atômica e só quando algo muda."""
+        c = self.clients.get(self.active) if self.active is not None else None
+        ws = self.workspaces[self.current_ws]
+        dados = {"pid": os.getpid(), "bar": self.bar_visible, "mode": self.mode, "split": ws.next_orient,
+                 "title": (c.title if c else "") or "", "ws": self.current_ws + 1}
+        texto = json.dumps(dados, ensure_ascii=False)
+        if texto == self._state_json:
+            return
+        self._state_json = texto
+        try:
+            tmp = STATE_PATH.with_suffix(".tmp")
+            tmp.write_text(texto, encoding="utf-8")
+            os.replace(tmp, STATE_PATH)
+        except OSError:
+            pass
+
+    def _desktop_box(self) -> tuple[int, int, int, int]:
+        """Retângulo que envolve todos os monitores: (x1, y1, x2, y2)."""
+        ms = self.monitors or [(0, 0, self.width, self.height)]
+        return (min(m[0] for m in ms), min(m[1] for m in ms),
+                max(m[0] + m[2] for m in ms), max(m[1] + m[3] for m in ms))
 
     def _monitor_for_point(self, x: int, y: int) -> int:
         for i, (mx, my, mw, mh) in enumerate(self.monitors):
@@ -255,7 +380,7 @@ class JWM:
     def _grab_keys(self) -> None:
         # Alt é deliberadamente livre para os atalhos que JDesk/JTerm já usam.
         bindings = [
-            ("Return", 0), ("d", 0), ("q", 0), ("q", X.ShiftMask),
+            ("Return", 0), ("d", 0), ("e", 0), ("q", 0), ("q", X.ShiftMask),
             ("f", 0), ("space", 0), ("Tab", 0),
             ("1", 0), ("2", 0), ("3", 0), ("4", 0),
             ("1", X.ShiftMask), ("2", X.ShiftMask), ("3", X.ShiftMask), ("4", X.ShiftMask),
@@ -265,6 +390,7 @@ class JWM:
             ("Left", X.ShiftMask), ("Right", X.ShiftMask), ("Up", X.ShiftMask), ("Down", X.ShiftMask),
             ("Left", X.ControlMask), ("Right", X.ControlMask), ("Up", X.ControlMask), ("Down", X.ControlMask),
             ("Escape", X.ShiftMask),
+            ("b", 0), ("v", 0), ("t", 0), ("r", 0), ("b", X.ShiftMask),
         ]
         for keysym_name, extra in bindings:
             code = self.dpy.keysym_to_keycode(XK.string_to_keysym(keysym_name))
@@ -361,16 +487,15 @@ class JWM:
             if self._is_desktop(win, title, klass):
                 self.desktop_id = wid
                 win.change_attributes(event_mask=X.EnterWindowMask | X.PropertyChangeMask)
-                # JDesk fica restrito ao monitor principal à esquerda (HDMI).
-                mx, my, mw, mh = self._monitor_rect(0)
-                win.configure(x=mx, y=my, width=mw, height=mh,
-                              border_width=0, stack_mode=X.Below)
+                self._grab_window_buttons(win, wid)
+                # JDesk fica restrito ao monitor primário (HDMI quando ligado).
+                self._place_desktop()
                 win.change_property(self.a["_NET_WM_WINDOW_TYPE"], Xatom_atom(), 32,
                                     [self.a["_NET_WM_WINDOW_TYPE_DESKTOP"]])
                 if not already_mapped:
                     win.map()
                 self._lower_desktop()
-                self.arrange()  # passa a reservar a faixa da JBar no topo
+                self.arrange()  # passa a reservar a faixa da JBar no rodapé
                 log.info("JDesk reconhecido como desktop de fundo (0x%x)", wid)
                 return
 
@@ -394,22 +519,14 @@ class JWM:
             if c.floating:
                 mx, my, mw, mh = self._monitor_rect(c.monitor)
                 gx, gy, gw, gh = c.geom
-                top = JDESK_BAR if self.desktop_id is not None else 0
-                if gx + gw <= mx or gx >= mx + mw or gy + gh <= my + top or gy >= my + mh:
-                    gx, gy = mx + (mw - min(gw, mw)) // 2, my + top + (mh - top - min(gh, mh - top)) // 2
-                c.geom = (gx, gy, min(gw, mw), min(gh, max(MIN_H, mh - top)))
+                bot = self._bar_bottom(c.monitor)
+                if gx + gw <= mx or gx >= mx + mw or gy + gh <= my or gy >= my + mh - bot:
+                    gx, gy = mx + (mw - min(gw, mw)) // 2, my + (mh - bot - min(gh, mh - bot)) // 2
+                c.geom = (gx, gy, min(gw, mw), min(gh, max(MIN_H, mh - bot)))
             self.clients[wid] = c
             self.workspaces[self.current_ws].clients.append(wid)
             win.change_attributes(event_mask=(X.EnterWindowMask | X.FocusChangeMask | X.PropertyChangeMask))
-            # Passive grabs allow Super+mouse actions without stealing normal clicks from Tk/apps.
-            for button in (1, 3):
-                for lock in self.lock_masks:
-                    try:
-                        win.grab_button(button, X.Mod4Mask | lock, False,
-                                        X.ButtonPressMask | X.ButtonReleaseMask | X.PointerMotionMask,
-                                        X.GrabModeAsync, X.GrabModeAsync, X.NONE, X.NONE)
-                    except error.BadAccess:
-                        log.warning("Não foi possível reservar Super+botão %d em 0x%x", button, wid)
+            self._grab_window_buttons(win, wid)
             win.change_attributes(border_pixel=self.pix_border)
             win.configure(border_width=BORDER)
             win.change_property(self.a["_NET_WM_DESKTOP"], Xatom_cardinal(), 32, [self.current_ws])
@@ -428,6 +545,22 @@ class JWM:
             return
         except Exception:
             log.exception("Falha ao gerenciar janela 0x%x", wid)
+
+    def _grab_window_buttons(self, win, wid: int) -> None:
+        """Implementa foco por clique sem perder o clique original do aplicativo.
+
+        O ponteiro fica síncrono no ButtonPress. Clique normal é repassado com
+        ReplayPointer; Super+botão inicia arraste e libera os eventos de movimento.
+        """
+        for button in (1, 3):
+            try:
+                win.grab_button(
+                    button, X.AnyModifier, False,
+                    X.ButtonPressMask | X.ButtonReleaseMask | X.PointerMotionMask,
+                    X.GrabModeSync, X.GrabModeAsync, X.NONE, X.NONE,
+                )
+            except error.BadAccess:
+                log.warning("Não foi possível reservar botão %d em 0x%x", button, wid)
 
     def _unmap_by_wm(self, c: Client) -> None:
         try:
@@ -460,68 +593,94 @@ class JWM:
         return [c for c in self._visible_clients()
                 if c.monitor == monitor and not c.floating and not c.fullscreen]
 
+    def _sync_tree(self, monitor: int, ids: list[int], area: tuple[int, int, int, int]) -> Arvore:
+        """Deixa a árvore deste monitor/workspace com exatamente as janelas `ids`.
+        Quem saiu (fechou, virou flutuante, mudou de workspace/monitor) é removido e o espaço volta
+        para o vizinho; quem chegou divide a janela focada, no lado maior (ou como Super+B/V pediu)."""
+        ws = self.workspaces[self.current_ws]
+        tree = ws.trees.setdefault(monitor, Arvore())
+        wanted = set(ids)
+        for wid in [w for w in tree.ids() if w not in wanted]:
+            tree.remover(wid)
+        for wid in ids:
+            if wid in tree:
+                continue
+            tree.layout(*area, GAP, MIN_W, MIN_H)               # atualiza os retângulos antes de dividir
+            alvo = self.active if self.active in tree else None
+            orient = ws.next_orient
+            ws.next_orient = None
+            if orient is None:
+                r = tree.folhas[alvo].rect if alvo in tree.folhas else area
+                orient = "h" if r[2] >= r[3] else "v"
+            tree.inserir(wid, alvo, orient)
+        return tree
+
     def arrange(self) -> None:
         self._refresh_size()
         visible = self._visible_clients()
-        top = JDESK_BAR if self.desktop_id is not None else 0
 
         # Cada monitor tem seu próprio layout. O JDesk fica apenas no monitor 0
         # (HDMI à esquerda); janelas comuns são organizadas no monitor onde abriram.
         for monitor_index, (mx, my, mw, mh) in enumerate(self.monitors or [(0, 0, self.width, self.height)]):
             group = [c for c in visible if c.monitor == monitor_index]
-            tile = [c for c in group if not c.floating and not c.fullscreen]
+            tile = [c for c in group if not c.floating]          # inclui a tela cheia: mantém o lugar na árvore
             full = next((c for c in group if c.fullscreen), None)
-            area_y = my + top
-            area_h = max(MIN_H, mh - top)
+            bot = self._bar_bottom(monitor_index)
+            area_y = my
+            area_h = max(MIN_H, mh - bot)
+            ax, ay = mx + OUTER, area_y + OUTER
+            aw, ah = max(MIN_W, mw - 2 * OUTER), max(MIN_H, area_h - 2 * OUTER)
+            tree = self._sync_tree(monitor_index, [c.wid for c in tile], (ax, ay, aw, ah))
             if full:
                 self._place(full, mx, my, mw, mh, border=0)
             elif tile:
-                if len(tile) == 1:
-                    self._place(tile[0], mx, area_y, mw, area_h)
-                else:
-                    gap = GAP
-                    usable_w = max(2 * MIN_W, mw - gap)
-                    master_w = int(usable_w * self.workspaces[self.current_ws].master_ratio)
-                    master_w = min(usable_w - MIN_W, max(MIN_W, master_w))
-                    stack_w = usable_w - master_w
-                    self._place(tile[0], mx, area_y, master_w - gap, area_h)
-                    stack = tile[1:]
-                    total_weight = sum(max(0.1, c.weight) for c in stack)
-                    y = area_y
-                    remaining_h = area_h
-                    remaining_weight = total_weight
-                    for i, c in enumerate(stack):
-                        if i == len(stack) - 1:
-                            h = remaining_h
-                        else:
-                            h = int(remaining_h * max(0.1, c.weight) / max(0.1, remaining_weight))
-                        h = max(MIN_H, min(remaining_h - MIN_H * (len(stack) - i - 1), h))
-                        self._place(c, mx + master_w + gap, y, stack_w - gap, h - gap)
-                        y += h
-                        remaining_h -= h
-                        remaining_weight -= max(0.1, c.weight)
+                for wid, (rx, ry, rw, rh) in tree.layout(ax, ay, aw, ah, GAP, MIN_W, MIN_H).items():
+                    self._place(self.clients[wid], rx, ry, rw, rh)
 
-        # Janelas flutuantes e diálogos ficam limitados ao monitor a que pertencem.
+        # Janelas flutuantes podem ocupar qualquer ponto do desktop, inclusive a emenda entre os
+        # monitores. Só garantimos que fiquem inteiras dentro da caixa que une os monitores, que
+        # não cubram a barra do JDesk e que o centro delas caia sobre algum monitor (sem "vazio").
+        bx1, by1, bx2, by2 = self._desktop_box()
+        m0x, m0y, m0w, m0h = self._monitor_rect(self.desk_monitor)
         for c in visible:
             if c.fullscreen or not c.floating:
                 continue
-            mx, my, mw, mh = self._monitor_rect(c.monitor)
             x, y, w, h = c.geom
-            top_y = my + top
-            w, h = min(mw, max(MIN_W, w)), min(max(MIN_H, mh - top), max(MIN_H, h))
-            x = max(mx, min(x, mx + mw - w))
-            y = max(top_y, min(y, my + mh - h))
+            w = min(bx2 - bx1, max(MIN_W, w))
+            h = min(by2 - by1, max(MIN_H, h))
+            x = max(bx1, min(x, bx2 - w))
+            toca_jdesk = self.desktop_id is not None and x < m0x + m0w and x + w > m0x
+            y = max(by1, min(y, by2 - h))
+            bot0 = self._bar_bottom(self.desk_monitor)
+            if toca_jdesk and bot0:                    # não deixa a flutuante cobrir a faixa da barra
+                barra_y = m0y + m0h - bot0
+                if y < m0y + m0h and y + h > barra_y:
+                    y = max(by1, barra_y - h)
+            cx, cy = x + w // 2, y + h // 2
+            mx, my, mw, mh = self._monitor_rect(self._monitor_for_point(cx, cy))
+            if not (mx <= cx < mx + mw and my <= cy < my + mh):  # centro no vazio entre monitores
+                y += min(max(cy, my), my + mh - 1) - cy
+                x += min(max(cx, mx), mx + mw - 1) - cx
             c.geom = (x, y, w, h)
+            c.monitor = self._monitor_for_point(x + w // 2, y + h // 2)
             self._place(c, *c.geom)
 
         for c in visible:
             self._set_border(c)
+
+        # Camadas, de baixo para cima: JDesk < janelas em mosaico < tela cheia < flutuantes.
+        # As flutuantes mantêm a ordem do último foco (a ativa por cima); dar foco a uma janela em
+        # mosaico nunca a coloca por cima de uma flutuante.
         try:
             for c in visible:
-                if c.floating:
+                if not c.floating and not c.fullscreen:
                     c.window.configure(stack_mode=X.Above)
-            if self.active in self.clients and self.clients[self.active].workspace == self.current_ws:
-                self.clients[self.active].window.configure(stack_mode=X.Above)
+            for c in visible:
+                if c.fullscreen:
+                    c.window.configure(stack_mode=X.Above)
+            ordem = {wid: i for i, wid in enumerate(self.mru)}
+            for c in sorted((c for c in visible if c.floating), key=lambda c: ordem.get(c.wid, -1)):
+                c.window.configure(stack_mode=X.Above)
         except error.BadWindow:
             pass
         self._lower_desktop()
@@ -529,42 +688,83 @@ class JWM:
         self.dpy.flush()
 
     def _place(self, c: Client, x: int, y: int, w: int, h: int, border: int = BORDER) -> None:
+        """(x, y, w, h) é o retângulo EXTERNO da janela, borda incluída.
+
+        No X11 width/height são o tamanho interno e a borda é somada por fora; sem descontar
+        2*border aqui, toda janela passaria da área que recebeu (alguns pixels à direita/embaixo)."""
         w, h = max(MIN_W, int(w)), max(MIN_H, int(h))
+        iw, ih = max(1, w - 2 * border), max(1, h - 2 * border)
         try:
-            c.window.configure(x=int(x), y=int(y), width=w, height=h,
-                               border_width=border, border_pixel=self.pix_focus if c.wid == self.active else self.pix_border)
+            # _place: tira o border_pixel do configure e pinta depois
+            c.window.configure(x=int(x), y=int(y), width=iw, height=ih, border_width=border)
+            c.window.change_attributes(border_pixel=self.pix_focus if c.wid == self.active else
+                                       (self.pix_float if c.floating else self.pix_border))
             c.geom = (int(x), int(y), w, h)
         except error.BadWindow:
             pass
 
+    # _set_border
     def _set_border(self, c: Client) -> None:
         try:
             pixel = self.pix_focus if c.wid == self.active else (self.pix_float if c.floating else self.pix_border)
-            c.window.configure(border_pixel=pixel)
+            if self.mode and c.wid == self.active:
+                pixel = self.pix_mode
+            c.window.change_attributes(border_pixel=pixel)
         except error.BadWindow:
             pass
 
+
     def focus(self, wid: Optional[int]) -> None:
+        old_wid = self.active
+        old = self.clients.get(old_wid) if old_wid is not None else None
+
         if wid is None or wid not in self.clients:
             self.active = None
+            if old is not None:
+                self._set_border(old)
             try:
                 self.root.set_input_focus(X.RevertToPointerRoot, X.CurrentTime)
+                self.root.change_property(self.a["_NET_ACTIVE_WINDOW"], Xatom_window(), 32, [X.NONE])
+                self.dpy.flush()
             except Exception:
                 pass
             return
+
         c = self.clients[wid]
         if c.workspace != self.current_ws:
             return
+
+        # A janela pode continuar marcada como ativa internamente enquanto o foco X11
+        # foi transferido para o JDesk (desktop). Ao clicar nela de novo, restaure o
+        # foco real mesmo que o ID já seja self.active.
+        if wid == old_wid:
+            try:
+                c.window.set_input_focus(X.RevertToPointerRoot, X.CurrentTime)
+                self.root.change_property(self.a["_NET_ACTIVE_WINDOW"], Xatom_window(), 32, [wid])
+                self.dpy.flush()
+            except error.BadWindow:
+                self.remove(wid)
+            return
+
         self.active = wid
         self.active_monitor = c.monitor
+        if wid in self.mru:
+            self.mru.remove(wid)
+        self.mru.append(wid)
+
         try:
-            c.window.map()
             c.window.set_input_focus(X.RevertToPointerRoot, X.CurrentTime)
-            c.window.configure(stack_mode=X.Above)
+            # Só janelas flutuantes precisam subir ao receber foco. Uma janela em mosaico
+            # elevada aqui poderia ficar por cima de um diálogo flutuante.
+            if c.floating:
+                c.window.configure(stack_mode=X.Above)
             self.root.change_property(self.a["_NET_ACTIVE_WINDOW"], Xatom_window(), 32, [wid])
+            if old is not None:
+                self._set_border(old)
+            self._set_border(c)
+            self.dpy.flush()
         except error.BadWindow:
             self.remove(wid)
-        self.arrange()
 
     def focus_step(self, step: int = 1) -> None:
         ws = self.workspaces[self.current_ws]
@@ -587,29 +787,13 @@ class JWM:
             return
         cur = self.clients[self.active]
         visible = [c for c in visible if c.monitor == cur.monitor]
-        # Em layout master/stack, ir para esquerda escolhe o master; direita escolhe o stack.
+        direction = {"h": "left", "j": "down", "k": "up", "l": "right"}.get(direction, direction)
         tile = self._tile_clients(cur.monitor)
-        if cur in tile and len(tile) > 1:
-            if direction in ("left", "h"):
-                target = tile[0] if cur is not tile[0] else (tile[-1] if len(tile) > 1 else cur)
-                self.focus(target.wid)
+        if cur in tile:
+            alvo = vizinho({c.wid: c.geom for c in tile}, cur.wid, direction)
+            if alvo is not None:
+                self.focus(alvo)
                 return
-            if direction in ("right", "l"):
-                target = tile[1] if cur is tile[0] else (tile[0] if cur is tile[-1] else tile[tile.index(cur) + 1])
-                self.focus(target.wid)
-                return
-            if direction in ("up", "k", "down", "j"):
-                candidates = [c for c in visible if c is not cur]
-                if candidates:
-                    same_stack = [c for c in tile[1:] if c is not cur]
-                    pool = same_stack if cur in tile[1:] and same_stack else candidates
-                    i = pool.index(cur) if cur in pool else -1
-                    if direction in ("up", "k"):
-                        target = pool[(i - 1) % len(pool)] if pool else candidates[0]
-                    else:
-                        target = pool[(i + 1) % len(pool)] if pool else candidates[0]
-                    self.focus(target.wid)
-                    return
         x, y, w, h = cur.geom
         cx, cy = x + w / 2, y + h / 2
         eligible = []
@@ -635,16 +819,21 @@ class JWM:
             self.focus_step(1)
 
     def reorder(self, direction: str) -> None:
-        ws = self.workspaces[self.current_ws]
-        if self.active not in ws.clients:
+        """Super+Shift+setas/hjkl: troca a janela de lugar com a vizinha nessa direção."""
+        if self.active not in self.clients:
             return
-        i = ws.clients.index(self.active)
-        delta = -1 if direction in ("left", "up", "h", "k") else 1
-        j = max(0, min(len(ws.clients) - 1, i + delta))
-        if i != j:
-            ws.clients[i], ws.clients[j] = ws.clients[j], ws.clients[i]
-            self.arrange()
-            self.focus(self.active)
+        c = self.clients[self.active]
+        direction = {"h": "left", "j": "down", "k": "up", "l": "right"}.get(direction, direction)
+        tile = self._tile_clients(c.monitor)
+        tree = self.workspaces[self.current_ws].trees.get(c.monitor)
+        if c not in tile or tree is None:
+            return
+        alvo = vizinho({t.wid: t.geom for t in tile}, c.wid, direction)
+        if alvo is None:
+            return
+        tree.trocar(c.wid, alvo)
+        self.arrange()
+        self.focus(c.wid)
 
     def resize_tiling(self, direction: str) -> None:
         if self.active not in self.clients:
@@ -658,22 +847,12 @@ class JWM:
             elif direction == "down": h += RESIZE_STEP
             c.geom = (x, y, max(MIN_W, w), max(MIN_H, h))
         else:
-            ws = self.workspaces[self.current_ws]
-            tile = self._tile_clients(c.monitor)
-            if len(tile) < 2:
+            tree = self.workspaces[self.current_ws].trees.get(c.monitor)
+            if tree is None or len(tree) < 2:
                 return
-            if direction == "left":
-                ws.master_ratio = max(0.30, ws.master_ratio - RATIO_STEP)
-            elif direction == "right":
-                ws.master_ratio = min(0.78, ws.master_ratio + RATIO_STEP)
-            elif direction in ("up", "down") and c in tile[1:]:
-                idx = tile.index(c)
-                neighbor = tile[idx - 1] if direction == "up" and idx > 1 else (
-                    tile[idx + 1] if direction == "down" and idx < len(tile) - 1 else None)
-                if neighbor:
-                    step = WEIGHT_STEP if direction == "down" else -WEIGHT_STEP
-                    c.weight = max(0.2, c.weight + step)
-                    neighbor.weight = max(0.2, neighbor.weight - step)
+            direction = {"h": "left", "j": "down", "k": "up", "l": "right"}.get(direction, direction)
+            if not tree.redimensionar(c.wid, direction, RESIZE_STEP, GAP):
+                return
         self.arrange()
 
     def toggle_float(self) -> None:
@@ -683,9 +862,9 @@ class JWM:
         if not c.floating:
             # Retângulo confortável centralizado no monitor da janela ativa.
             mx, my, mw, mh = self._monitor_rect(c.monitor)
-            top = JDESK_BAR if self.desktop_id is not None else 0
-            w, h = min(mw, max(MIN_W, mw * 3 // 5)), min(mh - top, max(MIN_H, mh * 2 // 3))
-            c.geom = (mx + (mw - w) // 2, my + top + (mh - top - h) // 2, w, h)
+            bot = self._bar_bottom(c.monitor)
+            w, h = min(mw, max(MIN_W, mw * 3 // 5)), min(mh - bot, max(MIN_H, mh * 2 // 3))
+            c.geom = (mx + (mw - w) // 2, my + (mh - bot - h) // 2, w, h)
             c.floating = True
         else:
             c.floating = False
@@ -712,6 +891,7 @@ class JWM:
         idx = max(0, min(3, idx))
         if idx == self.current_ws:
             return
+        self._enter_mode(None)
         old = self.workspaces[self.current_ws]
         for wid in list(old.clients):
             c = self.clients.get(wid)
@@ -750,6 +930,7 @@ class JWM:
             self.arrange()
         if idx == self.current_ws:
             c.window.map()
+            self.arrange()
             self.focus(c.wid)
 
     def launch(self, argv: list[str]) -> None:
@@ -770,6 +951,19 @@ class JWM:
                 self.launch([found])
                 return
         self.launch_runner()
+
+    def launch_file_manager(self) -> None:
+        """Abre a pasta pessoal no gerenciador instalado, com fallback via xdg-open."""
+        for name in ("thunar", "pcmanfm", "pcmanfm-qt", "spacefm", "xfe", "nemo", "dolphin", "nautilus"):
+            executable = shutil.which(name)
+            if executable:
+                self.launch([executable, str(Path.home())])
+                return
+        xdg_open = shutil.which("xdg-open")
+        if xdg_open:
+            self.launch([xdg_open, str(Path.home())])
+        else:
+            log.error("Nenhum gerenciador de arquivos encontrado; instale Thunar/PCManFM ou xdg-utils")
 
     def launch_runner(self) -> None:
         runner = APP_DIR / "JRun.py"
@@ -803,6 +997,8 @@ class JWM:
             if wid in ws.clients:
                 ws.clients.remove(wid)
         self.ignored_unmaps.pop(wid, None)
+        if wid in self.mru:
+            self.mru.remove(wid)
         if self.active == wid:
             self.active = None
         self._update_client_list()
@@ -817,8 +1013,38 @@ class JWM:
         except Exception:
             return []
 
+    def _enter_mode(self, nome: Optional[str]) -> None:
+        """Modo \"resize\" (como o do sway): captura o teclado; hjkl/setas redimensionam, Enter/Esc saem."""
+        if nome == self.mode:
+            return
+        try:
+            if nome:
+                self.root.grab_keyboard(True, X.GrabModeAsync, X.GrabModeAsync, X.CurrentTime)
+            else:
+                self.dpy.ungrab_keyboard(X.CurrentTime)
+        except Exception:
+            log.warning("não consegui %s o teclado", "capturar" if nome else "soltar")
+            return
+        self.mode = nome
+        log.info("modo: %s", nome or "normal")
+        if self.active in self.clients:
+            self._set_border(self.clients[self.active])
+        self.dpy.flush()
+
+    def _key_resize(self, ev) -> None:
+        k = self.key_names.get(ev.detail, "").lower()
+        if k in ("return", "escape"):
+            self._enter_mode(None)
+            return
+        direction = {"h": "left", "j": "down", "k": "up", "l": "right"}.get(k, k)
+        if direction in ("left", "right", "up", "down"):
+            self.resize_tiling(direction)
+
     def _key(self, ev) -> None:
         state = ev.state
+        if self.mode == "resize":
+            self._key_resize(ev)
+            return
         if not (state & X.Mod4Mask):
             return
         shift = bool(state & X.ShiftMask)
@@ -830,6 +1056,8 @@ class JWM:
             self.launch_terminal()
         elif k == "d" and not shift:
             self.launch_runner()
+        elif k == "e" and not shift and not ctrl:
+            self.launch_file_manager()
         elif k == "q" and shift:
             self.running = False
         elif k == "q" and not shift:
@@ -840,6 +1068,18 @@ class JWM:
             self.toggle_float()
         elif k == "tab" and not shift:
             self.focus_step(1)
+        elif k == "b" and shift and not ctrl:
+            self.bar_visible = not self.bar_visible
+            self.arrange()
+        elif k in ("b", "v") and not shift and not ctrl:
+            self.workspaces[self.current_ws].next_orient = "h" if k == "b" else "v"
+        elif k == "t" and not shift and not ctrl:
+            c = self.clients.get(self.active)
+            tree = self.workspaces[self.current_ws].trees.get(c.monitor) if c else None
+            if tree is not None and tree.alternar_divisao(c.wid):
+                self.arrange()
+        elif k == "r" and not shift and not ctrl:
+            self._enter_mode("resize")
         elif k == "escape" and shift:
             self.running = False
         elif k in ("1", "2", "3", "4"):
@@ -874,7 +1114,6 @@ class JWM:
         elif direction == "right": x += MOVE_STEP
         elif direction == "up": y -= MOVE_STEP
         elif direction == "down": y += MOVE_STEP
-        top = JDESK_BAR if self.desktop_id is not None else 0
         c.geom = (max(0, min(x, self.width - w)), max(0, min(y, self.height - h)), w, h)
         c.monitor = self._monitor_for_point(c.geom[0] + w // 2, c.geom[1] + h // 2)
         self.active_monitor = c.monitor
@@ -920,16 +1159,29 @@ class JWM:
         self._place(c, *c.geom)
 
     def _button(self, ev) -> None:
-        if self.desktop_id and ev.window.id == self.desktop_id:
-            # JDesk continua abaixo dos outros; foco é necessário para os próprios atalhos Alt.
+        wid = ev.window.id
+        if self.desktop_id and wid == self.desktop_id:
+            # Só um clique no desktop pode transferir o foco para o JDesk; passar o mouse
+            # por ele não rouba o teclado das aplicações.
             try:
                 self.dpy.set_input_focus(ev.window, X.RevertToPointerRoot, X.CurrentTime)
             except error.BadWindow:
                 pass
+            self.dpy.allow_events(X.ReplayPointer, X.CurrentTime)
             return
-        if ev.window.id in self.clients:
-            self.focus(ev.window.id)
+
+        if wid not in self.clients:
+            self.dpy.allow_events(X.ReplayPointer, X.CurrentTime)
+            return
+
+        self.focus(wid)
+        if (ev.state & X.Mod4Mask) and ev.detail in (1, 3):
             self._start_drag(ev)
+            # A passive grab já está ativa; liberta os eventos seguintes para mover/redimensionar.
+            self.dpy.allow_events(X.AsyncPointer, X.CurrentTime)
+        else:
+            # Reenvia o mesmo clique ao aplicativo (botões, seleção de texto e menus continuam a funcionar).
+            self.dpy.allow_events(X.ReplayPointer, X.CurrentTime)
 
     def _client_message(self, ev) -> None:
         typ = ev.client_type
@@ -955,11 +1207,7 @@ class JWM:
     def _configure_request(self, ev) -> None:
         wid = ev.window.id
         if self.desktop_id and wid == self.desktop_id:
-            try:
-                mx, my, mw, mh = self._monitor_rect(0)
-                ev.window.configure(x=mx, y=my, width=mw, height=mh, border_width=0, stack_mode=X.Below)
-            except error.BadWindow:
-                self.desktop_id = None
+            self._place_desktop()
             return
         c = self.clients.get(wid)
         mask = ev.value_mask
@@ -1005,14 +1253,12 @@ class JWM:
         elif ev.type == X.ButtonPress:
             self._button(ev)
         elif ev.type == X.EnterNotify:
-            wid = ev.window.id
-            if wid in self.clients and self.clients[wid].workspace == self.current_ws:
-                self.focus(wid)
-            elif self.desktop_id and wid == self.desktop_id:
-                try:
-                    ev.window.set_input_focus(X.RevertToPointerRoot, X.CurrentTime)
-                except error.BadWindow:
-                    pass
+            if (FOCUS_FOLLOWS_MOUSE and ev.mode == X.NotifyNormal
+                    and ev.detail not in (X.NotifyInferior, X.NotifyVirtual, X.NotifyNonlinearVirtual)):
+                wid = ev.window.id
+                if wid in self.clients and self.clients[wid].workspace == self.current_ws:
+                    self.focus(wid)
+            # O JDesk não recebe foco ao mero movimento do ponteiro; use clique ou atalho.
         elif ev.type == X.MotionNotify:
             self._motion(ev)
         elif ev.type == X.ButtonRelease:
@@ -1033,16 +1279,35 @@ class JWM:
         elif ev.type == X.ConfigureNotify and ev.window.id == self.root.id:
             self._refresh_size()
             self._refresh_monitors()
+            self._place_desktop()
             self.arrange()
 
     def run(self) -> None:
+        """Dorme em select() até chegar evento do X (ou até a próxima checagem de monitores):
+        o WM parado não gasta CPU, e um erro num evento não derruba a sessão."""
+        fd = self.dpy.fileno()
+        next_poll = time.monotonic() + HOTPLUG_POLL
         try:
             while self.running:
                 while self.dpy.pending_events():
-                    ev = self.dpy.next_event()
-                    self._handle(ev)
-                if not self.dpy.pending_events():
-                    time.sleep(0.004)
+                    try:
+                        self._handle(self.dpy.next_event())
+                    except Exception:
+                        log.exception("Erro ao tratar evento do X11 (ignorado)")
+                    if not self.running:
+                        break
+                if not self.running:
+                    break
+                self._write_state()
+                now = time.monotonic()
+                if now >= next_poll:
+                    try:
+                        self._poll_outputs()
+                    except Exception:
+                        log.exception("Erro ao checar monitores (ignorado)")
+                    next_poll = time.monotonic() + (0.3 if self._layout_proc else HOTPLUG_POLL)
+                    continue
+                select.select([fd], [], [], max(0.01, next_poll - now))
         except KeyboardInterrupt:
             pass
         finally:
@@ -1050,6 +1315,10 @@ class JWM:
 
     def shutdown(self) -> None:
         log.info("Encerrando JWM")
+        try:
+            STATE_PATH.unlink(missing_ok=True)
+        except OSError:
+            pass
         try:
             if self.drag:
                 self.dpy.ungrab_pointer(X.CurrentTime)
@@ -1098,7 +1367,10 @@ def Xatom_cardinal():
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="JWM: window manager X11 do ecossistema J")
-    parser.add_argument("--no-jdesk", action="store_true", help="não iniciar o JDesk automaticamente")
+
+    parser.add_argument("--no-jdesk", "--no-ui", dest="no_jdesk", action="store_true",
+                        help="não iniciar o JDesk (sem JBar): só o WM, sistema liso")
+
     args = parser.parse_args()
     try:
         JWM(jdesk=not args.no_jdesk).run()

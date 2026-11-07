@@ -1,12 +1,39 @@
-# Segredos / credenciais
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Lixo de editor e backups
+*.bak
+*.tmp
+*~
+*.swp
+
+# Logs e pacotes que não são código
+*.log
+*.zip
+
+# Segredos do Google (JClass): NUNCA versionar
 credentials.json
-token.json
 client_secret*.json
+token.json
+token.pickle
+.env
+
+# Mais segredos, caches e lixo de editor
 *.pem
 *.key
-.env
 .env.*
 !.env.example
+.jcache/
+.vscode/
+.idea/
+archive/
+backups/
+*.orig
+/*.patch
 
 # Conteúdo baixado do Classroom (ajuste para a(s) sua(s) pasta(s) de download)
 Downloads/
@@ -14,19 +41,3 @@ downloads/
 *.pptx
 *.ppt
 *.part
-
-# Python
-__pycache__/
-*.pyc
-.venv/
-venv/
-
-# Cache do JSlides (Fase 4) e lixo de editor
-.jcache/
-.vscode/
-.idea/
-archive/
-backups/
-*.zip
-*.log
-tools/JShell/jshell

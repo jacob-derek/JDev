@@ -1,178 +1,214 @@
 # JDev
 
-> Um ambiente de desenvolvimento em Python, feito para o terminal, reunindo editor, shell e navegador de arquivos.
+Um ambiente gráfico **leve, bonito e feito à mão** para Linux/X11, em Python: gerenciador de janelas
+em mosaico, desktop com terminais, editor, shell e gerenciador de arquivos, tudo com uma paleta única.
 
-O **JDev** é um projeto pessoal em desenvolvimento. A ideia é construir um ambiente leve, modular e integrado para programar e trabalhar com arquivos sem sair do terminal.
+Grátis, aberto e independente (licença MIT). Testado no **Void Linux**.
 
-## Componentes
+![JDev: JDesk e JBar no monitor principal](docs/img/desktop.png)
 
-| Componente | Descrição |
+| Só o JWM (`--no-ui`) | Monitor em pé |
 |---|---|
-| **JCode** | Editor de código em tela cheia, com destaque de sintaxe e ferramentas para Python. |
-| **JShell** | Shell interativo com comandos próprios e acesso aos utilitários do JDev. |
-| **JFiles** | Navegador de arquivos em TUI, com operações de gerenciamento e preview. |
-| **JDevTodo** | Lista de tarefas em janela Tkinter flutuante para acompanhar o desenvolvimento. |
+| ![JWM sem JDesk](docs/img/no-ui.png) | ![Monitor vertical](docs/img/vga.png) |
 
-## Funcionalidades
+## O que tem aqui
 
-### JCode — editor
-
-- Interface de terminal em tela cheia, construída com `prompt_toolkit`.
-- Edição de arquivos com salvamento por `Ctrl+S`.
-- Indicador de estado do arquivo: salvo ou modificado.
-- Números de linha e destaque da linha atual.
-- Guias visuais de indentação.
-- Realce de sintaxe por meio do Pygments, selecionado conforme a extensão/nome do arquivo.
-- Validação sintática de Python em tempo real, com indicação de linha, coluna e mensagem do erro.
-- Painel **Outline/Sumário** para arquivos Python, identificando funções, funções assíncronas e classes por meio da AST.
-- Navegação pelo sumário para saltar até uma definição.
-- Indentação com `Tab`.
-- Selecionar tudo, copiar, recortar e colar por atalhos implementados no editor.
-- Interface com tema escuro inspirado no Gruvbox.
-- Suporte a mouse.
-
-### JShell — shell
-
-- Prompt interativo com o diretório atual visível.
-- Autocomplete de comandos conhecidos.
-- Comandos próprios para navegação e gerenciamento de arquivos.
-- Integração para abrir o JCode e o JFiles.
-- Saída colorida e mensagens de erro/sucesso.
-- Expansão de `~` e suporte a caminhos relativos nos comandos de arquivo.
-
-#### Comandos disponíveis
-
-| Comando | Função |
+| Programa | Função |
 |---|---|
-| `help` | Exibe a ajuda de comandos. |
-| `exit` | Encerra o JShell. |
-| `clear` | Limpa a tela. |
-| `pwd` | Mostra o diretório atual. |
-| `ls` | Lista pastas e arquivos, com tamanhos. |
-| `cd <pasta>` | Muda o diretório atual. |
-| `mkdir <pasta>` | Cria uma pasta. |
-| `rd <pasta>` | Remove uma pasta vazia. |
-| `touch <arquivo>` | Cria um arquivo vazio. |
-| `ren <origem> <destino>` | Renomeia um arquivo ou pasta. |
-| `cp <origem> <destino>` | Copia arquivo ou pasta. |
-| `mv <origem> <destino>` | Move arquivo ou pasta. |
-| `rm <arquivo>` | Remove um arquivo. |
-| `cat <arquivo>` | Exibe o conteúdo de um arquivo. |
-| `open <arquivo>` | Abre um arquivo com o programa padrão do sistema. |
-| `jcode <arquivo>` | Abre um arquivo no JCode. |
-| `jcode new <arquivo>` | Abre um arquivo novo no JCode para criação. |
-| `jfiles` | Abre o navegador JFiles. |
+| **JWM** | Gerenciador de janelas X11 com mosaico em árvore (estilo Sway), janelas flutuantes, 4 workspaces e multi-monitor |
+| **JDesk** | Desktop com painéis (JFiles, JShell, JCode, JClass) e a barra |
+| **JBar** | Barra em pílulas no rodapé: workspaces, relógio, volume, RAM, rede, CPU e o estado do JWM |
+| **JTerm** | Emulador de terminal em Tk (usado pelos painéis do JDesk e como terminal avulso) |
+| **JCode** | Editor de código no terminal, com realce de sintaxe |
+| **JShell** | Shell interativo com prompt em pílulas, realce e sugestões |
+| **JFiles** | Gerenciador de arquivos no terminal, com prévia |
+| **JRun** | Executor de comandos (`Super+D`) |
+| **jtheme** | Temas: Tokyo Night, Catppuccin Mocha, Gruvbox Dark e Dawn (claro) |
 
-> Observação: o JShell é um shell com comandos próprios; não é um substituto completo do Bash. Para executar comandos arbitrários do sistema, use o terminal do sistema.
-
-### JFiles — navegador de arquivos
-
-- Interface TUI com navegação por teclado.
-- Pastas listadas antes dos arquivos, em ordem alfabética.
-- Ícones e tamanhos dos arquivos.
-- Preview do conteúdo de arquivos de texto e da lista de conteúdo de pastas.
-- Visualização de informações: caminho, tipo, extensão, tamanho, data de modificação e quantidade de itens em pastas.
-- Criar arquivos e pastas.
-- Renomear, copiar, mover e excluir itens.
-- Confirmação de exclusão.
-- Abertura de arquivos selecionados no JCode.
-- Mensagens de status e tratamento de erros de acesso/permissão.
-- Layout adaptável ao tamanho do terminal e suporte a mouse.
-
-### JDevTodo — lista de tarefas
-
-- Janela desktop feita com Tkinter.
-- Mantém-se acima das outras janelas.
-- Tarefas separadas por áreas do projeto.
-- Checkboxes e contador de tarefas concluídas.
-- Área rolável e botão para limpar as marcações.
-- Tema escuro alinhado à identidade visual do JDev.
+Bibliotecas internas: `jtile.py` (mosaico), `jipc.py` (mensagens entre os programas), `jicons.py` (ícones).
+Ferramentas opcionais ficam em `tools/` (JClass, JSlides, JPlayer...).
 
 ## Instalação
 
-### Requisitos
-
-- Python 3.10 ou superior (versão recomendada; o projeto pode funcionar em versões próximas compatíveis).
-- Terminal com suporte a sequências de controle ANSI.
-- Para a interface de tarefas: Tkinter.
-- Bibliotecas Python usadas pelo projeto:
+### 1. Dependências do sistema (nomes do Void; em outras distros procure os equivalentes)
 
 ```bash
-pip install prompt_toolkit pygments pyperclip
+sudo xbps-install -S xorg-minimal xinit python3 python3-tkinter python3-xlib xrandr git
 ```
 
-Em algumas distribuições Linux, o Tkinter precisa ser instalado pelo gerenciador de pacotes do sistema. No Debian, por exemplo:
+Opcionais, mas recomendados:
 
 ```bash
-sudo apt install python3-tk
+sudo xbps-install -S picom xwallpaper xsetroot   # sombras e cantos arredondados, wallpaper, cursor
 ```
 
-## Como executar
-
-Clone o repositório:
+### 2. Baixar e instalar as dependências Python
 
 ```bash
-git clone https://github.com/jacob-derek/JDev.git
-cd JDev
+git clone https://github.com/jacob-derek/JDev.git ~/JDev
+cd ~/JDev
+pip install --user -r requirements.txt
 ```
 
-Inicie o shell:
+Precisa de Python 3.10 ou mais novo. Se o seu sistema reclamar de `externally-managed-environment`,
+use um ambiente virtual com acesso aos pacotes do sistema:
+`python3 -m venv --system-site-packages ~/.venvs/jdev && . ~/.venvs/jdev/bin/activate`.
+
+Ferramentas opcionais (`tools/`): `pip install --user -r requirements-tools.txt`.
+O `pymupdf` é AGPL e é instalado por você; o JDev não o inclui.
+
+### 3. Iniciar
+
+De um TTY (fora do X):
 
 ```bash
-python3 JShell.py
+~/JDev/start-jwm            # ambiente completo: JWM + JDesk + JBar
+~/JDev/start-jwm --no-ui    # só o gerenciador de janelas, sem JDesk e sem JBar
 ```
 
-Abra o navegador de arquivos diretamente:
+Para ter o comando `jwm`:
 
 ```bash
-python3 JFiles.py
+mkdir -p ~/.local/bin
+ln -s ~/JDev/start-jwm ~/.local/bin/jwm
 ```
 
-Abra a lista de tarefas:
+Para sair: `Super+Shift+Q`.
+
+## Atalhos
+
+`Super` é a tecla do Windows. Os atalhos seguem o espírito do Sway.
+
+### JWM (janelas)
+
+| Atalho | Ação |
+|---|---|
+| `Super+Enter` | Abrir terminal |
+| `Super+D` | Abrir o JRun (executar comando) |
+| `Super+E` | Abrir o gerenciador de arquivos |
+| `Super+Q` | Fechar a janela ativa |
+| `Super+Shift+Q` | Sair do JWM |
+| `Super+H/J/K/L` ou setas | Mover o foco |
+| `Super+Shift+H/J/K/L` ou setas | Trocar a janela de lugar com a vizinha (flutuante: redimensiona) |
+| `Super+Ctrl+setas` | Redimensionar pela divisória |
+| `Super+R` | Modo resize: `H/L` largura, `J/K` altura, `Enter`/`Esc` sai |
+| `Super+B` / `Super+V` | A próxima janela divide lado a lado / empilhada |
+| `Super+T` | Alternar a divisão (horizontal ↔ vertical) |
+| `Super+F` | Tela cheia |
+| `Super+Espaço` | Alternar flutuante / mosaico |
+| `Super+Tab` | Próxima janela |
+| `Super+1..4` | Ir para o workspace |
+| `Super+Shift+1..4` | Mandar a janela para o workspace |
+| `Super+Shift+B` | Mostrar / esconder a barra |
+| `Super+setas` (flutuante) | Mover a janela |
+| `Super+arrastar` (botão 1) | Mover a janela (vira flutuante) |
+| `Super+arrastar` (botão 3) | Redimensionar a janela (vira flutuante) |
+
+### JDesk (painéis)
+
+O JDesk usa `Alt` no lugar do `Super`:
+
+| Atalho | Ação |
+|---|---|
+| `Alt+H/J/K/L` ou setas | Mover o foco entre painéis |
+| `Alt+Shift+H/J/K/L` | Trocar o painel de lugar |
+| `Alt+1..4` | Workspace do JDesk (ou clique na barra) |
+| `Alt+F` ou `Alt+Z` | Tela cheia do painel |
+| `Alt+R` | Modo resize dos painéis |
+| `Alt+Shift+Q` / `Alt+Shift+R` | Matar / reiniciar o programa do painel |
+| `Alt+Shift+E` | Fechar o JDesk (pede confirmação) |
+| `Alt+=` / `Alt+-` / `Alt+M` | Volume + / − / mudo |
+
+Dentro de cada painel valem os atalhos do JTerm (`Ctrl+Shift+C/V`, `Shift+PgUp`, `Ctrl+roda` para o zoom).
+
+## Configuração
+
+### Temas
 
 ```bash
-python3 JDevTodo.py
+python3 jtheme.py              # lista os temas (o ativo vem marcado)
+python3 jtheme.py show         # mostra as cores no terminal
+python3 jtheme.py set gruvbox  # grava a escolha em ~/.config/jdev/theme
 ```
 
-O JCode normalmente é iniciado pelo JShell ou pelo JFiles:
+Vale na próxima sessão. Para testar só uma vez: `JTHEME=dawn python3 JShell.py`.
+O `jtheme.py` é opcional: sem ele ao lado, cada programa usa o Tokyo Night embutido.
+
+### Wallpaper
+
+Coloque as imagens em `~/.config/jdev/`:
+
+- `horizontal.png` (ou `.jpg`/`.jpeg`/`.webp`): monitores deitados
+- `vertical.png`: monitores em pé
+
+O `jwm-layout` escolhe pela orientação real de cada monitor e ajusta a imagem ao tamanho dele
+(precisa do `xwallpaper`; `feh` e `hsetroot` funcionam como plano B). `JWM_WALLPAPER=/caminho/img`
+usa a mesma imagem em todos. O JDesk cobre o monitor primário, então o wallpaper aparece nos demais.
+
+### Monitores
+
+O padrão assume HDMI à esquerda (primário) e VGA à direita, em pé. Ajuste sem editar arquivos:
 
 ```bash
-python3 JCode.py caminho/para/arquivo.py
+JWM_VGA_MODE=1366x768 JWM_VGA_RATE=60 JWM_VGA_ROTATE=normal ~/JDev/start-jwm
 ```
 
-## Estrutura do projeto
+Com um só monitor, o `jwm-layout` simplesmente o usa.
 
-```text
-JDev/
-├── JCode.py       # Editor de código
-├── JShell.py      # Shell interativo
-├── JFiles.py      # Navegador e gerenciador de arquivos
-├── JDevTodo.py    # Lista de tarefas desktop
-└── README.md
+### Cursor
+
+O "X" feio do Xorg some com um tema de cursor. Instale um (por exemplo Adwaita ou Bibata) e, no
+`jwm-session`, exporte `XCURSOR_THEME` e `XCURSOR_SIZE` e rode `xsetroot -cursor_name left_ptr`.
+
+### Efeitos (picom)
+
+Sombras, cantos arredondados e animações vêm do picom, que é opcional (animações pedem a v12 ou mais nova).
+Um ponto de partida para o `~/.config/picom/picom.conf`:
+
+```conf
+backend = "glx";
+vsync = true;
+unredir-if-possible = true;
+corner-radius = 10;
+shadow = true;
+shadow-radius = 14;
+shadow-opacity = 0.35;
+animations = (
+  { triggers = ["open", "show"];  preset = "appear";          duration = 0.18; scale = 0.92; },
+  { triggers = ["close", "hide"]; preset = "disappear";       duration = 0.14; scale = 0.92; },
+  { triggers = ["geometry"];      preset = "geometry-change"; duration = 0.18; }
+);
 ```
 
-## Tecnologias
+Sem blur de propósito: é o efeito mais caro e o JDev quer ser leve.
 
-- Python
-- `prompt_toolkit` — interface interativa de terminal
-- Pygments — realce de sintaxe
-- Python AST — análise estrutural de código Python
-- `pyperclip` — integração com a área de transferência
-- Tkinter / ttk — janela da lista de tarefas
+## Arquivos que o JDev usa
 
-## Em desenvolvimento
+| Caminho | Para quê |
+|---|---|
+| `~/.config/jdev/theme` | Tema escolhido |
+| `~/.config/jdev/horizontal.*`, `vertical.*` | Wallpapers |
+| `~/.cache/jwm.log` | Log do gerenciador de janelas |
+| `~/.cache/jwm-session.log` | Log da sessão, dos monitores e do wallpaper |
+| `~/.cache/jwm-state.json` | Estado do JWM para a JBar (modo, divisão, título, barra visível) |
 
-Algumas ideias registradas para versões futuras:
+## Desenvolvimento
 
-- Abas no JCode e terminais secundários.
-- Busca no editor e navegação direta para uma linha.
-- Melhorias no Outline e autocomplete de símbolos.
-- Execução de código diretamente pelo JCode.
-- Autocomplete de caminhos no JShell.
-- Histórico de comandos e informações do sistema.
-- Busca no JFiles e escolha entre abrir ou executar arquivos.
-- Integração mais profunda entre os componentes e configuração/tema compartilhados.
+```bash
+python3 -m unittest discover -s tests -t . -v   # testes (só biblioteca padrão)
+scripts/xephyr-test.sh                          # JWM numa janela, sem arriscar a sessão
+scripts/xephyr-test.sh --no-ui                  # idem, só o gerenciador de janelas
+```
 
-## Estado do projeto
+O GitHub Actions roda os testes em cada push.
 
-O JDev está em desenvolvimento ativo. Recursos, atalhos e compatibilidade podem mudar entre versões.
+## Solução de problemas
+
+- **Tela preta ao iniciar:** `Ctrl+Alt+F2` volta ao TTY. Veja `tail ~/.cache/jwm.log ~/.cache/jwm-session.log`.
+- **Wallpaper não aparece:** confira se o `xwallpaper` está instalado e o `~/.cache/jwm-session.log`.
+- **Sem barra:** `Super+Shift+B` alterna a barra; sem o JDesk (`--no-ui`) não há barra.
+- **Cores diferentes entre programas:** confira `python3 jtheme.py` e se `JTHEME` está definida no ambiente.
+
+## Licença
+
+[MIT](LICENSE).

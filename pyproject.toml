@@ -1,0 +1,15 @@
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B"]
+ignore = [
+    "E501",  # linha longa: fica para uma passada de formatação separada
+    "E701",  # "if x: return" numa linha só (estilo): revisar depois
+    "E741",  # variável chamada l/O/I: renomear depois
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Ferramentas opcionais, ainda não revisadas (TODO): apagar esta linha quando estiverem limpas.
+"tools/**" = ["F401", "F841", "B904", "B905", "B009"]
