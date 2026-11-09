@@ -1,7 +1,8 @@
-"""Põe a raiz do repositório no sys.path (os programas do JDev ficam soltos na raiz)."""
+"""Poe a raiz do repositorio e a pasta tools/ no sys.path (os programas ficam soltos)."""
 import sys
 from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parent.parent
-if str(RAIZ) not in sys.path:
-    sys.path.insert(0, str(RAIZ))
+for _p in (RAIZ, RAIZ / "tools"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))

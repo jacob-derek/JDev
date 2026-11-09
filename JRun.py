@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """JRun — lançador leve de aplicativos e comandos para o JWM (X11)."""
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -8,13 +9,31 @@ import configparser
 import tkinter as tk
 from tkinter import messagebox
 
-BG = "#1a1b26"
-PANEL = "#24283b"
-FG = "#c0caf5"
-BLUE = "#7aa2f7"
-DIM = "#565f89"
-SELECT = "#36415f"
-MUTED = "#a9b1d6"
+try:  # cores do tema (jtheme.py); sem ele ao lado vale o Tokyo Night embutido
+    import jtheme
+    _t = jtheme.T
+    BG, PANEL, FG, BLUE = _t["bg"], _t["bg_hover"], _t["fg_bright"], _t["blue"]
+    DIM, SELECT, MUTED = _t["dim"], _t["select"], _t["fg"]
+except (ImportError, AttributeError, KeyError):
+    BG, PANEL, FG, BLUE = "#1a1b26", "#24283b", "#c0caf5", "#7aa2f7"
+    DIM, SELECT, MUTED = "#565f89", "#36415f", "#a9b1d6"
+
+
+def monitor_sob_ponteiro(root):
+    """(x, y, largura, altura) do monitor onde esta o mouse; None se nao der para saber."""
+    try:
+        px, py = root.winfo_pointerxy()
+        saida = subprocess.run(["xrandr", "--listmonitors"], capture_output=True, text=True, timeout=2).stdout
+    except (OSError, subprocess.SubprocessError, tk.TclError):
+        return None
+    for linha in saida.splitlines():
+        m = re.search(r"(\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)", linha)
+        if not m:
+            continue
+        w, h, x, y = (int(v) for v in m.groups())
+        if x <= px < x + w and y <= py < y + h:
+            return (x, y, w, h)
+    return None
 
 
 def application_dirs():
@@ -112,9 +131,10 @@ def main():
     width, height = 620, 440
     root.geometry(f"{width}x{height}")
     root.update_idletasks()
-    # Centraliza horizontal e verticalmente na tela X11.
-    x = max(0, (root.winfo_screenwidth() - width) // 2)
-    y = max(0, (root.winfo_screenheight() - height) // 2)
+    # Centraliza no monitor onde esta o mouse (com varios monitores, a tela X inteira nao serve de base).
+    mx, my, mw, mh = monitor_sob_ponteiro(root) or (0, 0, root.winfo_screenwidth(), root.winfo_screenheight())
+    x = mx + max(0, (mw - width) // 2)
+    y = my + max(0, (mh - height) // 2)
     root.geometry(f"{width}x{height}+{x}+{y}")
 
     header = tk.Frame(root, bg=BG)

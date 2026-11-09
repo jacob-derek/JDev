@@ -39,7 +39,7 @@ try:  # paleta compartilhada (opcional): sem o jtheme.py ao lado vale o Tokyo Ni
 except ImportError:
     from types import SimpleNamespace as _NS
     _T = _NS(PANE_BG="#1a1b26", BORDER="#56566e", FOCUS="#b04a67", FLOAT="#e0af68", MODE="#9ece6a",
-             GAP=8, BAR_H=36)
+             GAP=8, BAR_H=44)
 LOG_PATH = Path.home() / ".cache" / "jwm.log"
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(

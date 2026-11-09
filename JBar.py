@@ -31,11 +31,15 @@ try:  # opcional: sem o jtheme.py ao lado vale o Tokyo Night embutido
     from jtheme import (BAR_H, DARK, DESK_BG, DIM, FG, FOCUS, GAP, GREEN, BLUE, CYAN, RED, YELLOW, LINE,
                         MODE, ON_ACCENT, PILL_BG, PILL_H, PILL_HOVER)
 except ImportError:
-    BAR_H, PILL_H, GAP = 36, 28, 8
+    BAR_H, PILL_H, GAP = 44, 34, 8
     DESK_BG, PILL_BG, PILL_HOVER, LINE = "#13141c", "#1f2335", "#2a2f45", "#292e42"
     FG, DIM, DARK, ON_ACCENT = "#a9b1d6", "#565f89", "#16161e", "#fbe9ef"
     FOCUS, MODE = "#b04a67", "#9ece6a"
     GREEN, BLUE, CYAN, RED, YELLOW = "#9ece6a", "#7aa2f7", "#7dcfff", "#f7768e", "#e0af68"
+try:
+    from jtheme import BAR_FONT
+except ImportError:
+    BAR_FONT = 12
 BAR_BG = DESK_BG   # o "vazio" entre as pílulas tem a cor do fundo do JDesk: parece transparente
 HOVER = PILL_HOVER
 
@@ -295,8 +299,8 @@ class StatusBar(tk.Canvas):
     """
     HEIGHT = BAR_H
     COMPACT_W = 1100  # abaixo disso (ex.: monitor em pé) somem NET, data e título
-    TAB_W = 26
-    PAD = 10
+    TAB_W = round(BAR_FONT * 2.6)
+    PAD = round(BAR_FONT * 0.9)
 
     def __init__(self, parent, n_ws, on_select, on_visibilidade=None):
         super().__init__(parent, bg=BAR_BG, height=self.HEIGHT, bd=0, highlightthickness=0)
@@ -304,7 +308,7 @@ class StatusBar(tk.Canvas):
             locale.setlocale(locale.LC_TIME, "")  # dia/mês no idioma do sistema
         except locale.Error:
             pass
-        self.font = font.Font(family=self._family(), size=10)
+        self.font = font.Font(family=self._family(), size=BAR_FONT)
         self.font_bold = self.font.copy()
         self.font_bold.configure(weight="bold")
         self.n_ws = n_ws

@@ -80,75 +80,6 @@ THEMES: dict[str, dict] = {
         border_idle="#382725", header_idle="#a68b7c", header_focus="#100b0b",
         ansi_black="#100b0b", ansi_brightblack="#78645e", ansi_white="#c9b8a7", ansi_brightwhite="#ead9c6",
     ),
-
-    # Cinza neutro: grafite, aço e branco suave.
-    "carbon": dict(
-        label="Carbon", light=False,
-        bg_deep="#101112", bg="#191b1e", bg_alt="#24272b", bg_hover="#30343a",
-        line="#2c3035", line2="#454b53", select="#414a55",
-        fg="#c1c5ca", fg_bright="#eceff2", fg_soft="#a9afb7", dim="#777f89", comment="#737b84", ln="#555d66",
-        secondary="#969da6",
-        on_bright="#111315", on_accent="#111315", focus="#b5bec8", border="#626b75",
-        red="#d97878", green="#9caf91", yellow="#d4bd83", orange="#d69a72",
-        blue="#8da9c4", cyan="#91b9bf", cyan2="#b1cbd0", purple="#b1a0c7",
-        border_idle="#2c3035", header_idle="#969da6", header_focus="#111315",
-        ansi_black="#111315", ansi_brightblack="#737b84", ansi_white="#c1c5ca", ansi_brightwhite="#eceff2",
-    ),
-
-    # Monokai clássico: fundo quase preto e acentos vivos.
-    "monokai": dict(
-        label="Monokai", light=False,
-        bg_deep="#171814", bg="#272822", bg_alt="#34352d", bg_hover="#414238",
-        line="#3e3d32", line2="#5b5a4f", select="#49483e",
-        fg="#cfcfc2", fg_bright="#f8f8f2", fg_soft="#b8b8a9", dim="#858577", comment="#75715e", ln="#666658",
-        secondary="#a6a696",
-        on_bright="#1b1c17", on_accent="#1b1c17", focus="#f92672", border="#68685c",
-        red="#f92672", green="#a6e22e", yellow="#e6db74", orange="#fd971f",
-        blue="#66d9ef", cyan="#66d9ef", cyan2="#a1efe4", purple="#ae81ff",
-        border_idle="#3e3d32", header_idle="#a6a696", header_focus="#1b1c17",
-        ansi_black="#1b1c17", ansi_brightblack="#75715e", ansi_white="#cfcfc2", ansi_brightwhite="#f8f8f2",
-    ),
-
-    # Nord: azul glacial e cinzas frios.
-    "nord": dict(
-        label="Nord", light=False,
-        bg_deep="#242933", bg="#2e3440", bg_alt="#3b4252", bg_hover="#434c5e",
-        line="#3b4252", line2="#4c566a", select="#4c607d",
-        fg="#d8dee9", fg_bright="#eceff4", fg_soft="#c5cedb", dim="#7b88a1", comment="#737f96", ln="#596579",
-        secondary="#aeb9ca",
-        on_bright="#242933", on_accent="#242933", focus="#88c0d0", border="#68758a",
-        red="#bf616a", green="#a3be8c", yellow="#ebcb8b", orange="#d08770",
-        blue="#81a1c1", cyan="#88c0d0", cyan2="#8fbcbb", purple="#b48ead",
-        border_idle="#3b4252", header_idle="#aeb9ca", header_focus="#242933",
-        ansi_black="#242933", ansi_brightblack="#737f96", ansi_white="#d8dee9", ansi_brightwhite="#eceff4",
-    ),
-
-    # Everforest: verde musgo, madeira e tons suaves.
-    "everforest": dict(
-        label="Everforest", light=False,
-        bg_deep="#1e2320", bg="#2d353b", bg_alt="#343f3e", bg_hover="#414b50",
-        line="#3d484d", line2="#56635f", select="#4b5c55",
-        fg="#d3c6aa", fg_bright="#e9e2d0", fg_soft="#c2b89f", dim="#859289", comment="#829181", ln="#65736b",
-        secondary="#a7b0a0",
-        on_bright="#202725", on_accent="#202725", focus="#a7c080", border="#66766b",
-        red="#e67e80", green="#a7c080", yellow="#dbbc7f", orange="#e69875",
-        blue="#7fbbb3", cyan="#83c092", cyan2="#9ecf9f", purple="#d699b6",
-        border_idle="#3d484d", header_idle="#a7b0a0", header_focus="#202725",
-        ansi_black="#202725", ansi_brightblack="#829181", ansi_white="#d3c6aa", ansi_brightwhite="#e9e2d0",
-    ),
-
-    "catppuccin": dict(
-        label="Catppuccin Mocha", light=False,
-        bg_deep="#11111b", bg="#1e1e2e", bg_alt="#313244", bg_hover="#45475a",
-        line="#313244", line2="#45475a", select="#45475a",
-        fg="#bac2de", fg_bright="#cdd6f4", fg_soft="#a6adc8", dim="#6c7086", comment="#7f849c", ln="#585b70",
-        secondary="#9399b2",
-        on_bright="#11111b", on_accent="#11111b", focus="#cba6f7", border="#585b70",
-        red="#f38ba8", green="#a6e3a1", yellow="#f9e2af", orange="#fab387",
-        blue="#89b4fa", cyan="#89dceb", cyan2="#94e2d5", purple="#cba6f7",
-        border_idle="#313244", header_idle="#7f849c", header_focus="#11111b",
-        ansi_black="#181825", ansi_brightblack="#7f849c", ansi_white="#bac2de", ansi_brightwhite="#cdd6f4",
-    ),
     "gruvbox": dict(
         label="Gruvbox Dark", light=False,
         bg_deep="#1d2021", bg="#282828", bg_alt="#3c3836", bg_hover="#504945",
@@ -160,6 +91,19 @@ THEMES: dict[str, dict] = {
         blue="#83a598", cyan="#8ec07c", cyan2="#8ec07c", purple="#d3869b",
         border_idle="#3c3836", header_idle="#a89984", header_focus="#1d2021",
         ansi_black="#1d2021", ansi_brightblack="#928374", ansi_white="#a89984", ansi_brightwhite="#ebdbb2",
+    ),
+    # Cinza puro: apenas preto, cinza e branco.
+    "carbon": dict(
+        label="Carbon", light=False,
+        bg_deep="#0d0d0d", bg="#151515", bg_alt="#1f1f1f", bg_hover="#2a2a2a",
+        line="#242424", line2="#3a3a3a", select="#333333",
+        fg="#c8c8c8", fg_bright="#f0f0f0", fg_soft="#b0b0b0", dim="#7a7a7a", comment="#828282", ln="#565656",
+        secondary="#9a9a9a",
+        on_bright="#0d0d0d", on_accent="#0d0d0d", focus="#d0d0d0", border="#5a5a5a",
+        red="#b0b0b0", green="#a8a8a8", yellow="#c0c0c0", orange="#b8b8b8",
+        blue="#c8c8c8", cyan="#b8b8b8", cyan2="#d8d8d8", purple="#a8a8a8",
+        border_idle="#242424", header_idle="#9a9a9a", header_focus="#0d0d0d",
+        ansi_black="#101010", ansi_brightblack="#828282", ansi_white="#c8c8c8", ansi_brightwhite="#f0f0f0",
     ),
     # Claro de papel quente (inspirado no Rosé Pine Dawn): fundo creme, texto roxo-acinzentado de
     # contraste médio e acentos dessaturados. Nada de branco puro, que é o que cansa a vista.
@@ -179,14 +123,9 @@ THEMES: dict[str, dict] = {
 
 ALIASES = {
     "tokyo": "tokyonight", "tokyo-night": "tokyonight", "tn": "tokyonight",
-    "catppuccin-mocha": "catppuccin", "mocha": "catppuccin", "cat": "catppuccin",
     "gruvbox-dark": "gruvbox", "gruv": "gruvbox",
     "around-the-fur": "around_the_fur", "atf": "around_the_fur",
     "hipopot(o)": "hipopoto", "hipo": "hipopoto",
-    "gray": "carbon", "grey": "carbon", "grafite": "carbon",
-    "monokai-classic": "monokai",
-    "nordic": "nord",
-    "ever-forest": "everforest",
     "light": "dawn", "claro": "dawn", "rosepine-dawn": "dawn",
 }
 PADRAO = "tokyonight"
@@ -262,8 +201,12 @@ COLOR_NAMES = {
 
 # medidas (px)
 GAP = 8                      # espaço entre janelas e entre pílulas
-BAR_H = 36                   # altura da faixa da barra (o JWM reserva exatamente isso embaixo)
-PILL_H = 28
+try:
+    BAR_FONT = max(8, int(os.environ.get("JBAR_FONT", "12")))   # fonte da JBar (pt); JBAR_FONT=14 aumenta tudo
+except ValueError:
+    BAR_FONT = 12
+PILL_H = round(BAR_FONT * 2.8)    # altura de cada pilula
+BAR_H = PILL_H + 10               # altura da faixa da barra (o JWM reserva exatamente isso embaixo)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -72,23 +72,35 @@ class TestEscolha(unittest.TestCase):
         self.assertEqual(recarregar(JTHEME="gruvbox").NOME, "gruvbox")
 
     def test_apelidos(self):
-        self.assertEqual(recarregar(JTHEME="claro").NOME, "dawn")
-        self.assertEqual(recarregar(JTHEME="MOCHA").NOME, "catppuccin")
+        for apelido, alvo in jtheme.ALIASES.items():
+            if alvo in jtheme.THEMES:
+                self.assertEqual(recarregar(JTHEME=apelido.upper()).NOME, alvo, apelido)
+
+    def test_apelidos_apontam_para_temas_que_existem(self):
+        for apelido, alvo in jtheme.ALIASES.items():
+            self.assertIn(alvo, jtheme.THEMES, f"apelido {apelido!r} aponta para tema inexistente")
 
     def test_tema_invalido_cai_no_padrao(self):
         self.assertEqual(recarregar(JTHEME="rosa-choque").NOME, "tokyonight")
 
+    def _dois_temas(self):
+        """Dois temas quaisquer diferentes do padrao (os nomes mudam conforme o repo)."""
+        nomes = [n for n in jtheme.THEMES if n != "tokyonight"]
+        return nomes[0], nomes[1]
+
     def test_arquivo_de_config(self):
+        a, _b = self._dois_temas()
         cfg = tempfile.mkdtemp()
         (Path(cfg) / "jdev").mkdir()
-        (Path(cfg) / "jdev" / "theme").write_text("catppuccin\n", encoding="utf-8")
-        self.assertEqual(recarregar(XDG_CONFIG_HOME=cfg).NOME, "catppuccin")
+        (Path(cfg) / "jdev" / "theme").write_text(a + "\n", encoding="utf-8")
+        self.assertEqual(recarregar(XDG_CONFIG_HOME=cfg).NOME, a)
 
     def test_variavel_vence_o_arquivo(self):
+        a, b = self._dois_temas()
         cfg = tempfile.mkdtemp()
         (Path(cfg) / "jdev").mkdir()
-        (Path(cfg) / "jdev" / "theme").write_text("catppuccin\n", encoding="utf-8")
-        self.assertEqual(recarregar(XDG_CONFIG_HOME=cfg, JTHEME="dawn").NOME, "dawn")
+        (Path(cfg) / "jdev" / "theme").write_text(a + "\n", encoding="utf-8")
+        self.assertEqual(recarregar(XDG_CONFIG_HOME=cfg, JTHEME=b).NOME, b)
 
     def test_constantes_seguem_o_tema(self):
         m = recarregar(JTHEME="gruvbox")
