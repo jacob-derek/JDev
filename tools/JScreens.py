@@ -565,13 +565,8 @@ class App:
         self.desenhar()
 
     def _posicionar_inativos(self):
-        borda = max(
-            (self._ret(n)[0] + self._ret(n)[2]
-             for n in self.est if self.est[n]["ativa"]),
-            default=0,
-        )
-        for n in self.est:
-            e = self.est[n]
+        borda = max((self._ret(n)[0] + self._ret(n)[2] for n in self.est if self.est[n]["ativa"]), default=0)
+        for e in self.est.values():
             if not e["ativa"]:
                 e["x"], e["y"] = borda, 0
 
@@ -867,6 +862,23 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr)
 
 
+def _jscreens_lock():
+    return os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "jscreens.lock")
+
+
+def _jscreens_ja_rodando() -> bool:
+    lock = _jscreens_lock()
+    try:
+        pid = int(open(lock).read().strip())
+        os.kill(pid, 0)
+        if shutil.which("xdotool"):
+            subprocess.run(["xdotool", "search", "--name", "JScreens", "windowactivate"],
+                           capture_output=True, timeout=1)
+        return True
+    except (OSError, ValueError, FileNotFoundError):
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if "--help" in args or "-h" in args:
@@ -889,9 +901,23 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(json.dumps(cfg, indent=2, ensure_ascii=False))
         return 0
-    import tkinter as tk
-    from tkinter import font as tkfont
-    App(tk, tkfont).rodar()
+    if _jscreens_ja_rodando():
+        return 0
+    lock = _jscreens_lock()
+    try:
+        with open(lock, "w") as _f:
+            _f.write(str(os.getpid()))
+    except OSError:
+        pass
+    try:
+        import tkinter as tk
+        from tkinter import font as tkfont
+        App(tk, tkfont).rodar()
+    finally:
+        try:
+            os.unlink(lock)
+        except OSError:
+            pass
     return 0
 
 

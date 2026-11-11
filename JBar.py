@@ -2,7 +2,7 @@
 """
 JBar - barra superior do JDesk (Fase 2).
 
-  [ 1 2 3 4 ]            [ qui 15 out  14:32 ]            [ VOL 65%  RAM 42%  NET ↓ 1.2M ↑ 30K  CPU 12% ]
+  [ 1 2 3 4 ]            [ qui 15 out  14:32 ]            [ VOL 65%  RAM 42%  CPU 12% ]
 
 - As métricas são coletadas numa thread (nada de subprocess ou I/O na thread da UI).
 - psutil é opcional: sem ele, CPU/RAM/rede aparecem como "--" (o volume e o relógio seguem).
@@ -125,6 +125,29 @@ def brilho(delta):
             pass
 
 
+def layout_atual() -> str:
+    """Le o layout xkb atual. Devolve "br", "us" ou "" se nao conseguir."""
+    try:
+        out = subprocess.run(["setxkbmap", "-query"], capture_output=True, text=True, timeout=1).stdout
+        m = re.search(r"^layout:\s*(\S+)", out, re.M)
+        return m.group(1) if m else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def mudar_layout(proximo: str | None = None) -> str:
+    """Alterna br <-> us (ou usa `proximo` explicitamente). Devolve o layout aplicado."""
+    atual = layout_atual()
+    if proximo is None:
+        proximo = "us" if atual == "br" else "br"
+    try:
+        subprocess.run(["setxkbmap", proximo], capture_output=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return proximo
+
+
+
 def em_thread(fn, *args):
     """Roda fn fora da thread da interface (pactl pode demorar e congelaria o Tk)."""
     threading.Thread(target=fn, args=args, daemon=True).start()
@@ -180,7 +203,7 @@ class Metrics:
         self.lock = threading.Lock()
         self.stop_ev = threading.Event()
         self.data = {"cpu": None, "ram": None, "down": None, "up": None,
-                     "vol": None, "muted": False}
+                     "vol": None, "muted": False, "kbd": ""}
 
     def start(self):
         threading.Thread(target=self._run_loop, daemon=True).start()
@@ -209,6 +232,7 @@ class Metrics:
 
         if self.stop_ev.wait(0.8):  # 1ª amostra logo depois do ponto de partida
             return
+        kbd_tick = 0
         while True:
             d = {}
             if psutil:
@@ -235,6 +259,11 @@ class Metrics:
                     if i:  # promove o leitor que funcionou
                         readers.insert(0, readers.pop(i))
                     break
+            # Layout de teclado: polling mais lento (a cada 5 ciclos ~5 s)
+            kbd_tick += 1
+            if kbd_tick >= 5:
+                d["kbd"] = layout_atual()
+                kbd_tick = 0
             with self.lock:
                 self.data.update(d)
             if self.stop_ev.wait(INTERVAL):
@@ -449,24 +478,19 @@ class StatusBar(tk.Canvas):
         else:
             vseg = [("VOL ", DIM, False), (f"{vol}%", CYAN, False)]
         right = [("vol", vseg)]
-        for key, nome in (("ram", "RAM"), ("net", "NET"), ("cpu", "CPU")):
-            if key == "net":
-                if compact:
-                    continue
-                dn, up = d.get("down"), d.get("up")
-                right.append((key, [("NET ", DIM, False),
-                                    (f"↓{fmt_rate(dn):>5}", GREEN if dn is not None else DIM, False),
-                                    (" ", DIM, False),
-                                    (f"↑{fmt_rate(up):>5}", BLUE if up is not None else DIM, False)]))
-            else:
-                v = d.get(key)
-                right.append((key, [(f"{nome} ", DIM, False),
-                                    (f"{barra(v)} {pct_txt(v):>4}", level_color(v), False)]))
+        kbd = d.get("kbd") or layout_atual()
+        if not compact and kbd:
+            kbd_seg = [("KB ", DIM, False), (kbd.upper(), YELLOW if kbd != "br" else CYAN, True)]
+            right.append(("kbd", kbd_seg))
+        for key, nome in (("ram", "RAM"), ("cpu", "CPU")):
+            v = d.get(key)
+            right.append((key, [(f"{nome} ", DIM, False),
+                                (f"{barra(v)} {pct_txt(v):>4}", level_color(v), False)]))
         clock = ([] if compact else [(data + "  ", DIM, False)]) + [(hora, FG, True)]
         modo_wm = est.get("mode")
         split = est.get("split")
         titulo = "" if compact else (est.get("title") or "")
-        sig = (W, self.current, tuple(sorted(self.created)), self.modo, modo_wm, split, titulo, self._hover,
+        sig = (W, self.current, tuple(sorted(self.created)), self.modo, modo_wm, split, titulo, self._hover, d.get("kbd"),
                tuple(tuple(s) for _k, s in right), tuple(clock))
         if not force and sig == self._sig:
             return
@@ -550,7 +574,7 @@ class StatusBar(tk.Canvas):
 
     def _on_motion(self, e):
         h = self._hit_em(e.x)
-        self._set_hover(h if h and h[0] in ("tab", "vol") else None)
+        self._set_hover(h if h and h[0] in ("tab", "vol", "kbd") else None)
 
     def _on_click(self, e):
         h = self._hit_em(e.x)
@@ -560,11 +584,15 @@ class StatusBar(tk.Canvas):
             self.on_select(h[1])
         elif h[0] == "vol":
             em_thread(toggle_mute)
+        elif h[0] == "kbd":
+            em_thread(lambda: mudar_layout())
 
     def _on_scroll(self, e, direcao):
         h = self._hit_em(e.x)
         if h and h[0] == "vol":
             em_thread(adjust_volume, direcao)
+        elif h and h[0] == "kbd":
+            pass  # scroll nao muda teclado
 
     # ── atualização (só lê o snapshot; nada bloqueante aqui) ──
     def refresh(self):

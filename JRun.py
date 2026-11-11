@@ -91,6 +91,10 @@ def read_applications():
                     )]
                     if not argv:
                         continue
+                    # Filtrar apps cujo executavel principal nao existe no PATH nem no disco.
+                    exec0 = argv[0]
+                    if not (os.path.isabs(exec0) or shutil.which(exec0)):
+                        continue
                     app = {
                         "name": name,
                         "exec": command,
@@ -121,7 +125,52 @@ def launch_app(app):
                      stderr=subprocess.DEVNULL)
 
 
+def _lockfile():
+    """Caminho do lockfile para impedir multiplas instancias."""
+    return os.path.join(os.environ.get("XDG_RUNTIME_DIR") or "/tmp", "jrun.lock")
+
+
+def _ja_rodando():
+    """True se ja existe uma instancia do JRun viva. Foca ela pelo WM_NAME se possivel."""
+    lock = _lockfile()
+    try:
+        pid = int(open(lock).read().strip())
+        os.kill(pid, 0)   # 0 = so checar; levanta OSError se nao existe
+        # Tenta trazer a janela existente para a frente via xdotool (opcional)
+        if shutil.which("xdotool"):
+            subprocess.run(["xdotool", "search", "--name", "JRun", "windowactivate"],
+                           capture_output=True, timeout=1)
+        return True
+    except (OSError, ValueError, FileNotFoundError):
+        return False
+
+
+def _escrever_lock():
+    try:
+        with open(_lockfile(), "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+
+
+def _apagar_lock():
+    try:
+        os.unlink(_lockfile())
+    except OSError:
+        pass
+
+
 def main():
+    if _ja_rodando():
+        return
+    _escrever_lock()
+    try:
+        _main_ui()
+    finally:
+        _apagar_lock()
+
+
+def _main_ui():
     root = tk.Tk()
     root.title("JRun")
     root.configure(bg=BG)
