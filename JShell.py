@@ -513,6 +513,7 @@ def abrir_jcode(caminho, criar=False, aqui=False):
 
     # Dentro do JDesk, abre no painel do JCode (use --aqui para abrir neste terminal).
     if not aqui and jipc is not None and jipc.enviar({"cmd": "open", "path": str(arquivo)}):
+        jipc.enviar({"cmd": "focus", "target": "jcode"})  # traz o painel do JCode para a frente
         imprimir(f"<secondary>Aberto no JCode do JDesk:</secondary> {fmt(arquivo)}")
         return 0
 

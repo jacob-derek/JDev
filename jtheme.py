@@ -13,12 +13,14 @@ Linha de comando:
     python3 jtheme.py              lista os temas (o ativo vem marcado)
     python3 jtheme.py set gruvbox  grava a escolha (vale na próxima sessão / próximo JDesk)
     python3 jtheme.py show [nome]  mostra as cores no terminal
+    python3 jtheme.py check [nome] confere chaves, cores e contraste (aponta o valor errado)
 
 Só constantes e funções leves: pode ser importado por qualquer programa sem custo.
 """
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -51,17 +53,32 @@ THEMES: dict[str, dict] = {
         ansi_black="#151914", ansi_brightblack="#71806c", ansi_white="#d8c6a0", ansi_brightwhite="#f0dfb5",
     ),
 
-    "catppuccin": dict(
-        label="Catppuccin Mocha", light=False,
-        bg_deep="#11111b", bg="#1e1e2e", bg_alt="#313244", bg_hover="#45475a",
-        line="#313244", line2="#45475a", select="#45475a",
-        fg="#bac2de", fg_bright="#cdd6f4", fg_soft="#a6adc8", dim="#6c7086", comment="#7f849c", ln="#585b70",
-        secondary="#9399b2",
-        on_bright="#11111b", on_accent="#11111b", focus="#cba6f7", border="#585b70",
-        red="#f38ba8", green="#a6e3a1", yellow="#f9e2af", orange="#fab387",
-        blue="#89b4fa", cyan="#89dceb", cyan2="#94e2d5", purple="#cba6f7",
-        border_idle="#313244", header_idle="#7f849c", header_focus="#11111b",
-        ansi_black="#181825", ansi_brightblack="#7f849c", ansi_white="#bac2de", ansi_brightwhite="#cdd6f4",
+    # Deftones — Around the Fur: azul frio, carvão e tons quentes de pele.
+    "around_the_fur": dict(
+        label="Around the Fur", light=False,
+        bg_deep="#090d13", bg="#111923", bg_alt="#1b2835", bg_hover="#293746",
+        line="#263746", line2="#40566a", select="#3d5368",
+        fg="#c5cbd0", fg_bright="#e8e3dc", fg_soft="#aab6c1", dim="#718292", comment="#687887", ln="#4b5d6d",
+        secondary="#9aa8b3",
+        on_bright="#10151b", on_accent="#10151b", focus="#d58b79", border="#596a78",
+        red="#d97870", green="#9eaa91", yellow="#d6b58b", orange="#d99573",
+        blue="#789bb8", cyan="#8db5c8", cyan2="#b0cbd5", purple="#a99ab8",
+        border_idle="#263746", header_idle="#9aa8b3", header_focus="#10151b",
+        ansi_black="#10151b", ansi_brightblack="#718292", ansi_white="#c5cbd0", ansi_brightwhite="#e8e3dc",
+    ),
+
+    # Capa escura de pintura e papel envelhecido: preto, vinho e vermelho queimado.
+    "hipopoto": dict(
+        label="Hipopoto", light=False,
+        bg_deep="#090808", bg="#141111", bg_alt="#211918", bg_hover="#302321",
+        line="#382725", line2="#59403a", select="#63312d",
+        fg="#c9b8a7", fg_bright="#ead9c6", fg_soft="#b9a698", dim="#806e67", comment="#78645e", ln="#594943",
+        secondary="#a68b7c",
+        on_bright="#100b0b", on_accent="#f2ded0", focus="#b63e35", border="#72514a",
+        red="#d34b3f", green="#8e9a72", yellow="#c6a16a", orange="#d16a45",
+        blue="#778a91", cyan="#8ba6a3", cyan2="#b0c2b8", purple="#a77b82",
+        border_idle="#382725", header_idle="#a68b7c", header_focus="#100b0b",
+        ansi_black="#100b0b", ansi_brightblack="#78645e", ansi_white="#c9b8a7", ansi_brightwhite="#ead9c6",
     ),
     "gruvbox": dict(
         label="Gruvbox Dark", light=False,
@@ -74,6 +91,19 @@ THEMES: dict[str, dict] = {
         blue="#83a598", cyan="#8ec07c", cyan2="#8ec07c", purple="#d3869b",
         border_idle="#3c3836", header_idle="#a89984", header_focus="#1d2021",
         ansi_black="#1d2021", ansi_brightblack="#928374", ansi_white="#a89984", ansi_brightwhite="#ebdbb2",
+    ),
+    # Cinza puro: apenas preto, cinza e branco.
+    "carbon": dict(
+        label="Carbon", light=False,
+        bg_deep="#0d0d0d", bg="#151515", bg_alt="#1f1f1f", bg_hover="#2a2a2a",
+        line="#242424", line2="#3a3a3a", select="#333333",
+        fg="#c8c8c8", fg_bright="#f0f0f0", fg_soft="#b0b0b0", dim="#7a7a7a", comment="#828282", ln="#565656",
+        secondary="#9a9a9a",
+        on_bright="#0d0d0d", on_accent="#0d0d0d", focus="#d0d0d0", border="#5a5a5a",
+        red="#b0b0b0", green="#a8a8a8", yellow="#c0c0c0", orange="#b8b8b8",
+        blue="#c8c8c8", cyan="#b8b8b8", cyan2="#d8d8d8", purple="#a8a8a8",
+        border_idle="#242424", header_idle="#9a9a9a", header_focus="#0d0d0d",
+        ansi_black="#101010", ansi_brightblack="#828282", ansi_white="#c8c8c8", ansi_brightwhite="#f0f0f0",
     ),
     # Claro de papel quente (inspirado no Rosé Pine Dawn): fundo creme, texto roxo-acinzentado de
     # contraste médio e acentos dessaturados. Nada de branco puro, que é o que cansa a vista.
@@ -93,8 +123,9 @@ THEMES: dict[str, dict] = {
 
 ALIASES = {
     "tokyo": "tokyonight", "tokyo-night": "tokyonight", "tn": "tokyonight",
-    "catppuccin-mocha": "catppuccin", "mocha": "catppuccin", "cat": "catppuccin",
     "gruvbox-dark": "gruvbox", "gruv": "gruvbox",
+    "around-the-fur": "around_the_fur", "atf": "around_the_fur",
+    "hipopot(o)": "hipopoto", "hipo": "hipopoto",
     "light": "dawn", "claro": "dawn", "rosepine-dawn": "dawn",
 }
 PADRAO = "tokyonight"
@@ -170,8 +201,12 @@ COLOR_NAMES = {
 
 # medidas (px)
 GAP = 8                      # espaço entre janelas e entre pílulas
-BAR_H = 36                   # altura da faixa da barra (o JWM reserva exatamente isso embaixo)
-PILL_H = 28
+try:
+    BAR_FONT = max(8, int(os.environ.get("JBAR_FONT", "12")))   # fonte da JBar (pt); JBAR_FONT=14 aumenta tudo
+except ValueError:
+    BAR_FONT = 12
+PILL_H = round(BAR_FONT * 2.8)    # altura de cada pilula
+BAR_H = PILL_H + 10               # altura da faixa da barra (o JWM reserva exatamente isso embaixo)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -296,6 +331,70 @@ def _mostrar(nome: str) -> None:
     print("  " + " ".join(chaves))
 
 
+_HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _luz(h: str) -> float:
+    c = [int(h[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    c = [x / 12.92 if x <= 0.03928 else ((x + 0.055) / 1.055) ** 2.4 for x in c]
+    return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+
+def _contraste(a: str, b: str) -> float:
+    la, lb = sorted((_luz(a), _luz(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+# (cor do texto, cor do fundo, minimo, o que mede)
+_CONTRASTES_ERRO = (
+    ("fg", "bg", 6.0, "texto sobre o fundo"),
+    ("on_accent", "focus", 3.5, "texto sobre a cor de foco"),
+    ("on_bright", "green", 3.5, "texto sobre o verde do modo"),
+)
+_CONTRASTES_AVISO = (
+    ("dim", "bg_alt", 2.5, "texto apagado sobre a pilula"),
+    ("comment", "bg", 3.0, "comentarios sobre o fundo"),
+)
+
+
+def validar(nome: str | None = None) -> list[tuple[str, str, str]]:
+    """Confere os temas. Devolve (nivel, tema, mensagem); nivel = ERRO ou AVISO."""
+    ref = THEMES["tokyonight"]
+    saida: list[tuple[str, str, str]] = []
+    for n, t in THEMES.items():
+        if nome and n != nome:
+            continue
+        for k in sorted(set(ref) - set(t)):
+            saida.append(("ERRO", n, f"falta a chave '{k}'"))
+        for k in sorted(set(t) - set(ref)):
+            saida.append(("ERRO", n, f"chave desconhecida '{k}' (erro de digitacao?)"))
+        invalido = False
+        for k, v in t.items():
+            if k in ("label", "light") or k not in ref:
+                continue
+            if not isinstance(v, str) or not _HEX.match(v):
+                invalido = True
+                dica = ""
+                if isinstance(v, str) and re.fullmatch(r"[0-9a-fA-F]{6}", v):
+                    dica = " (falta o # no comeco)"
+                elif isinstance(v, str) and re.fullmatch(r"#?[0-9a-fA-F]{3}", v):
+                    dica = " (3 digitos nao valem: usar 6, ex.: #aabbcc)"
+                saida.append(("ERRO", n, f"{k} = {v!r} nao e uma cor valida{dica}"))
+        if invalido:
+            continue
+        for a, b, minimo, rotulo in _CONTRASTES_ERRO:
+            if a in t and b in t:
+                c = _contraste(t[a], t[b])
+                if c < minimo:
+                    saida.append(("ERRO", n, f"{rotulo}: contraste {c:.1f} (minimo {minimo}); ajustar {a} ou {b}"))
+        for a, b, minimo, rotulo in _CONTRASTES_AVISO:
+            if a in t and b in t:
+                c = _contraste(t[a], t[b])
+                if c < minimo:
+                    saida.append(("AVISO", n, f"{rotulo}: contraste {c:.1f} (ideal {minimo}+)"))
+    return saida
+
+
 def _main(argv: list[str]) -> int:
     cmd = argv[0] if argv else "list"
     if cmd in ("list", "ls"):
@@ -317,6 +416,17 @@ def _main(argv: list[str]) -> int:
         if os.environ.get("JTHEME"):
             print("Aviso: a variável JTHEME está definida e tem prioridade sobre o arquivo.")
         return 0
+    if cmd == "check":
+        alvo = _resolver(argv[1]) if len(argv) > 1 else None
+        if len(argv) > 1 and not alvo:
+            print(f"tema desconhecido: {argv[1]}", file=sys.stderr)
+            return 2
+        problemas = validar(alvo)
+        for nivel, n, msg in problemas:
+            print(f"{nivel:<5} {n}: {msg}")
+        erros = sum(1 for p in problemas if p[0] == "ERRO")
+        print(f"{erros} erro(s), {len(problemas) - erros} aviso(s) em {1 if alvo else len(THEMES)} tema(s)")
+        return 1 if erros else 0
     if cmd == "show":
         for nome in ([_resolver(argv[1])] if len(argv) > 1 and _resolver(argv[1]) else THEMES):
             _mostrar(nome)
