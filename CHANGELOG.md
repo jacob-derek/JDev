@@ -3,6 +3,17 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e versionamento
 semântico (`MAJOR.MINOR.PATCH`).
 
+## [Não lançado]
+
+### Adicionado
+- **Fonte única** (`jtheme.py`): `JFONT=nome` ou `~/.config/jdev/font` escolhem a fonte de JTerm, JBar e JRun.
+  Sem pedido, vale a primeira instalada entre JetBrains Mono, Iosevka, Commit Mono e DejaVu Sans Mono.
+- **Tema Void**: preto de verdade (`python3 jtheme.py set void`).
+- `jwm-session` ajusta o Xft (hinting leve, antialias) pelo `xrdb`; `JWM_XFT=0` desliga.
+
+### Alterado
+- JTerm: respiro interno de 12 px (`JTERM_PAD=8` volta ao antigo) e cabeçalho dos painéis em fonte monoespaçada.
+
 ## [1.0.0] - 2026-11-07
 
 Primeira versão oficial: estável, bonita e leve.

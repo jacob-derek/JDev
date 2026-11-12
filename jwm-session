@@ -12,6 +12,18 @@ export XCURSOR_THEME="${XCURSOR_THEME:-Bibata-Modern-Classic}"
 export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
 command -v xsetroot >/dev/null 2>&1 && xsetroot -cursor_name left_ptr || true
 
+# Fonte (Xft): hinting leve e antialias deixam o texto do Tk mais nítido. JWM_XFT=0 desliga.
+# Subpixel é opcional: JWM_XFT_RGBA=rgb (monitor em pé: tente vrgb ou vbgr).
+if [ "${JWM_XFT:-1}" != 0 ] && command -v xrdb >/dev/null 2>&1; then
+    xrdb -merge <<EOF || true
+Xft.antialias: 1
+Xft.hinting: 1
+Xft.hintstyle: hintslight
+Xft.rgba: ${JWM_XFT_RGBA:-none}
+Xft.lcdfilter: lcddefault
+EOF
+fi
+
 # Monitores + wallpaper (HDMI/VGA, só um deles, ou os dois). Também é chamado pelo JWM
 # quando um monitor é ligado/desligado. Nunca derruba a sessão: se falhar, segue sem.
 if [ -f "$HERE/jwm-layout" ]; then

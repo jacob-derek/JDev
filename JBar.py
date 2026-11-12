@@ -371,7 +371,12 @@ class StatusBar(tk.Canvas):
         candidatos = ["Cascadia Mono", "Consolas", "JetBrains Mono", "DejaVu Sans Mono",
                       "Menlo", "Liberation Mono", "Courier New"]
         familias = set(font.families())
-        return next((f for f in candidatos if f in familias), "TkFixedFont")
+        try:  # fonte do tema (a mesma do JTerm)
+            from jtheme import escolher_fonte
+            escolhida = escolher_fonte(familias)
+        except (ImportError, AttributeError):
+            escolhida = None
+        return escolhida or next((f for f in candidatos if f in familias), "TkFixedFont")
 
     # ── API ──
     def set_workspaces(self, current, created):

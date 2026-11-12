@@ -170,8 +170,19 @@ def main():
         _apagar_lock()
 
 
+def _familia():
+    """Fonte do tema (a mesma do JTerm e da JBar); sem jtheme, a monospace do sistema."""
+    try:
+        from tkinter import font as tkfont
+        import jtheme
+        return jtheme.escolher_fonte(set(tkfont.families())) or "monospace"
+    except (ImportError, AttributeError, tk.TclError):
+        return "monospace"
+
+
 def _main_ui():
     root = tk.Tk()
+    fam = _familia()
     root.title("JRun")
     root.configure(bg=BG)
     root.resizable(False, False)
@@ -191,17 +202,17 @@ def _main_ui():
 
     tk.Label(
         header, text="JRun", bg=BG, fg=BLUE,
-        font=("monospace", 17, "bold")
+        font=(fam, 17, "bold")
     ).pack(side="left")
 
     tk.Label(
         header, text="  Aplicativos", bg=BG, fg=MUTED,
-        font=("monospace", 10)
+        font=(fam, 10)
     ).pack(side="left", pady=(5, 0))
 
     search = tk.Entry(
         root, bg=PANEL, fg=FG, insertbackground=FG,
-        relief="flat", font=("monospace", 12),
+        relief="flat", font=(fam, 12),
         highlightthickness=1, highlightbackground=DIM,
         highlightcolor=BLUE
     )
@@ -223,7 +234,7 @@ def _main_ui():
         list_frame, bg=PANEL, fg=FG,
         selectbackground=SELECT, selectforeground="#ffffff",
         activestyle="none", relief="flat", borderwidth=0,
-        highlightthickness=0, font=("monospace", 11),
+        highlightthickness=0, font=(fam, 11),
         yscrollcommand=scrollbar.set, exportselection=False
     )
     app_list.pack(side="left", fill="both", expand=True, padx=5, pady=5)
@@ -234,13 +245,13 @@ def _main_ui():
 
     status = tk.Label(
         footer, text="Carregando…", bg=BG, fg=DIM,
-        font=("monospace", 9), anchor="w"
+        font=(fam, 9), anchor="w"
     )
     status.pack(side="left", fill="x", expand=True)
 
     tk.Label(
         footer, text="Enter abrir · Ctrl+Enter comando · Esc sair",
-        bg=BG, fg=MUTED, font=("monospace", 8)
+        bg=BG, fg=MUTED, font=(fam, 8)
     ).pack(side="right")
 
     all_apps = read_applications()

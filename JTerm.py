@@ -57,7 +57,10 @@ except ImportError:
     HEADER_FG_IDLE, HEADER_FG_FOCUS = "#6b7394", "#16161e"
     # cor de cada painel: ponto no cabeçalho (inativo) e borda/cabeçalho (com foco)
     ACCENTS = {"jfiles": "#7aa2f7", "jshell": "#9ece6a", "jcode": "#bb9af7", "jclass": "#e0af68"}
-PAD = 8
+try:  # respiro interno do terminal, em px (JTERM_PAD=8 volta ao antigo)
+    PAD = max(0, int(os.environ.get("JTERM_PAD", "12")))
+except ValueError:
+    PAD = 12
 DEFAULT_KEY = (DEFAULT_FG, DEFAULT_BG, False, False, False, False)
 
 # A paleta ANSI precisa distinguir preto como TEXTO de preto como FUNDO:
@@ -262,7 +265,13 @@ def pick_family():
     global _family_cache
     if _family_cache is None:
         families = set(font.families())
-        _family_cache = next((f for f in FONT_CANDIDATES if f in families), "TkFixedFont")
+        escolhida = None
+        try:  # fonte do tema (JFONT / ~/.config/jdev/font / lista do jtheme)
+            import jtheme
+            escolhida = jtheme.escolher_fonte(families)
+        except (ImportError, AttributeError):
+            pass
+        _family_cache = escolhida or next((f for f in FONT_CANDIDATES if f in families), "TkFixedFont")
     return _family_cache
 
 
@@ -329,7 +338,7 @@ class PtyPane(tk.Frame):
                                 font=("TkDefaultFont", 9, "bold"), bd=0, pady=2)
             self.dot.pack(side=tk.LEFT)
             self.header = tk.Label(self.header_bar, text=f" {name.upper()} ", bg=BORDER_IDLE,
-                                   fg=HEADER_FG_IDLE, anchor="w", font=("TkDefaultFont", 9, "bold"),
+                                   fg=HEADER_FG_IDLE, anchor="w", font=(pick_family(), 9, "bold"),
                                    bd=0, pady=2)
             self.header.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
