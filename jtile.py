@@ -67,7 +67,7 @@ class Arvore:
             self.folhas[wid] = self.raiz = Folha(wid)
             return
         if alvo not in self.folhas:
-            alvo = next(reversed(list(self.folhas)))
+            alvo = next(reversed(self.folhas))
         velha = self.folhas[alvo]
         nova = Folha(wid)
         self.folhas[wid] = nova

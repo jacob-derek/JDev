@@ -25,6 +25,11 @@ from typing import Optional
 
 try:
     from Xlib import X, XK, display, error, protocol
+    from Xlib.protocol import event as xevent
+    try:
+        from Xlib.ext import randr as _randr
+    except ImportError:
+        _randr = None
 except ImportError as exc:
     print("JWM precisa do pacote Python python-xlib.", file=sys.stderr)
     print("No Void, procure com: xbps-query -Rs python3-xlib", file=sys.stderr)
@@ -91,6 +96,8 @@ class Client:
     weight: float = 1.0
     monitor: int = 0
     geom: tuple[int, int, int, int] = (80, 80, 800, 600)
+    applied_geom: Optional[tuple[int, int, int, int, int]] = None
+    applied_border: Optional[int] = None
 
 
 @dataclass
@@ -116,6 +123,11 @@ class JWM:
         self.desk_monitor = 0   # índice do monitor primário: onde mora o JDesk
         self._outputs_sig: Optional[tuple] = None
         self._pending_sig: Optional[tuple] = None
+        self._monitor_sig: Optional[tuple] = None
+        self._randr_enabled = False
+        self._stack_order_cache: Optional[tuple[int, ...]] = None
+        self._stacking_dirty = True
+        self._deferred_events = []
         self._layout_proc: Optional[subprocess.Popen] = None
         self.clients: dict[int, Client] = {}
         self.workspaces = [Workspace() for _ in range(4)]
@@ -131,6 +143,7 @@ class JWM:
         self.mode: Optional[str] = None   # None | "resize"
         self.bar_visible = True           # faixa da JBar reservada no rodapé?
         self._state_json = ""
+        self._client_list_cache: Optional[tuple[int, ...]] = None
         self.start_jdesk = jdesk
         self.lock_masks = (0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask)
         self.a = {name: self.dpy.intern_atom(name) for name in (
@@ -154,6 +167,8 @@ class JWM:
         self._refresh_size()
         self._refresh_monitors()
         self._outputs_sig = self._connected_signature()
+        self._monitor_sig = self._display_signature()
+        self._setup_randr_events()
         self._scan_existing_windows()
         if self.start_jdesk:
             self._start_desktop()
@@ -227,6 +242,42 @@ class JWM:
         except Exception:
             pass
 
+    def _setup_randr_events(self) -> None:
+        """Prefere eventos RandR a consultas frequentes ao xrandr."""
+        if _randr is None:
+            return
+        try:
+            if not self.dpy.has_extension("RANDR"):
+                return
+            self.dpy.xrandr_query_version()
+            mask = (_randr.RRScreenChangeNotifyMask | _randr.RRCrtcChangeNotifyMask |
+                    _randr.RROutputChangeNotifyMask)
+            self.root.xrandr_select_input(mask)
+            self.dpy.flush()
+            self._randr_enabled = True
+            log.info("Eventos RandR habilitados para detectar alterações de monitores")
+        except Exception:
+            self._randr_enabled = False
+            log.warning("Não foi possível habilitar eventos RandR; usando polling de segurança", exc_info=True)
+
+    def _read_output_state(self) -> Optional[tuple[tuple[str, Optional[str]], ...]]:
+        """Retorna (saída, modo+posição) para cada saída conectada."""
+        try:
+            result = subprocess.run(["xrandr", "--query"], capture_output=True, text=True,
+                                    timeout=1.5, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        outputs = re.findall(
+            r"^(\S+) connected(?: primary)?(?:\s+(\d+x\d+[+-]\d+[+-]\d+))?",
+            result.stdout, re.M,
+        )
+        return tuple(sorted(outputs))
+
+    def _display_signature(self) -> Optional[tuple]:
+        return self._read_output_state()
+
     def _refresh_monitors(self) -> None:
         """Lê os retângulos físicos do xrandr; fallback para o desktop X11 inteiro.
 
@@ -265,15 +316,9 @@ class JWM:
             c.monitor = self._monitor_for_point(x + w // 2, y + h // 2)
 
     def _connected_signature(self) -> Optional[tuple]:
-        """Nomes das saídas com monitor conectado (para detectar ligar/desligar)."""
-        try:
-            result = subprocess.run(["xrandr", "--query"], capture_output=True, text=True,
-                                    timeout=1.5, check=False)
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None
-        return tuple(sorted(re.findall(r"^(\S+) connected", result.stdout, re.M)))
+        """Somente nomes das saídas conectadas; modo/posição não significa hotplug."""
+        state = self._read_output_state()
+        return tuple(name for name, _geometry in state) if state is not None else None
 
     def _place_desktop(self) -> None:
         """JDesk sempre cobre o monitor primário (e só ele)."""
@@ -287,33 +332,54 @@ class JWM:
             self.desktop_id = None
 
     def _poll_outputs(self) -> None:
-        """Ligou/desligou um monitor? Reaplica o layout (jwm-layout) e reorganiza as janelas."""
+        """Reage a hotplug com jwm-layout; mudanças de modo/posição só reorganizam janelas."""
         proc = self._layout_proc
         if proc is not None:
             if proc.poll() is None:
                 return
             self._layout_proc = None
             self._outputs_sig = self._connected_signature()
+            self._monitor_sig = self._display_signature()
             self._pending_sig = None
             self._after_layout()
             return
-        sig = self._connected_signature()
-        if sig is None or not LAYOUT_SCRIPT.is_file():
+
+        state = self._read_output_state()
+        if state is None:
             return
-        if self._outputs_sig is None or sig == self._outputs_sig:
-            self._outputs_sig, self._pending_sig = (self._outputs_sig or sig), None
+        connected = tuple(name for name, _geometry in state)
+        if self._monitor_sig != state:
+            self._monitor_sig = state
+            # Resolução/posição mudou, mas as saídas continuam as mesmas:
+            # não execute jwm-layout, pois ele poderia desfazer a escolha manual.
+            if self._outputs_sig == connected:
+                log.info("Modo/posição dos monitores mudou; atualizando geometria sem reaplicar jwm-layout")
+                self._after_layout()
+                return
+
+        if self._outputs_sig is None:
+            self._after_layout()
             return
-        if sig != self._pending_sig:  # exige duas leituras iguais: o monitor oscila ao ligar
-            self._pending_sig = sig
+        if connected == self._outputs_sig:
+            self._pending_sig = None
             return
-        log.info("Monitores mudaram: %s -> %s; reaplicando layout", self._outputs_sig, sig)
+        if not LAYOUT_SCRIPT.is_file():
+            log.warning("Saídas conectadas mudaram, mas %s não existe; atualizando geometria", LAYOUT_SCRIPT)
+            self._after_layout()
+            return
+        if connected != self._pending_sig:  # duas leituras iguais evitam oscilações no hotplug
+            self._pending_sig = connected
+            return
+
+        log.info("Conexões de monitores mudaram: %s -> %s; executando jwm-layout",
+                 self._outputs_sig, connected)
         try:
             self._layout_proc = subprocess.Popen(
                 ["sh", str(LAYOUT_SCRIPT)], stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         except OSError:
             log.exception("Não foi possível executar %s", LAYOUT_SCRIPT)
-            self._outputs_sig = sig
+            self._outputs_sig = connected
             self._pending_sig = None
 
     def _after_layout(self) -> None:
@@ -321,6 +387,9 @@ class JWM:
         self._refresh_monitors()
         self._place_desktop()
         self.arrange()
+        self._outputs_sig = self._connected_signature()
+        self._monitor_sig = self._display_signature()
+        self._pending_sig = None
 
     def _monitor_rect(self, index: Optional[int] = None) -> tuple[int, int, int, int]:
         if not self.monitors:
@@ -577,12 +646,31 @@ class JWM:
                 self.desktop_id = None
 
     def _update_client_list(self) -> None:
-        ids = list(self.clients)
+        """Atualiza listas EWMH; stacking segue a ordem real da árvore X (baixo -> cima)."""
+        ids = tuple(self.clients)
+        if ids != self._client_list_cache:
+            try:
+                self.root.change_property(self.a["_NET_CLIENT_LIST"], Xatom_window(), 32, list(ids))
+                self._client_list_cache = ids
+                self._stacking_dirty = True
+            except error.BadWindow:
+                return
+            except Exception:
+                log.debug("Não foi possível atualizar _NET_CLIENT_LIST", exc_info=True)
+
+        if not self._stacking_dirty:
+            return
         try:
-            self.root.change_property(self.a["_NET_CLIENT_LIST"], Xatom_window(), 32, ids)
-            self.root.change_property(self.a["_NET_CLIENT_LIST_STACKING"], Xatom_window(), 32, ids)
-        except Exception:
+            children = self.root.query_tree().children  # XQueryTree: ordem bottom-to-top
+            child_order = {child.id: index for index, child in enumerate(children)}
+            stacking = sorted((wid for wid in self.clients if wid in child_order),
+                              key=child_order.__getitem__)
+            self.root.change_property(self.a["_NET_CLIENT_LIST_STACKING"], Xatom_window(), 32, stacking)
+            self._stacking_dirty = False
+        except error.BadWindow:
             pass
+        except Exception:
+            log.debug("Não foi possível atualizar _NET_CLIENT_LIST_STACKING", exc_info=True)
 
     def _visible_clients(self) -> list[Client]:
         return [self.clients[w] for w in self.workspaces[self.current_ws].clients if w in self.clients]
@@ -668,21 +756,22 @@ class JWM:
         for c in visible:
             self._set_border(c)
 
-        # Camadas, de baixo para cima: JDesk < janelas em mosaico < tela cheia < flutuantes.
-        # As flutuantes mantêm a ordem do último foco (a ativa por cima); dar foco a uma janela em
-        # mosaico nunca a coloca por cima de uma flutuante.
-        try:
-            for c in visible:
-                if not c.floating and not c.fullscreen:
+        # Camadas, de baixo para cima: mosaico < fullscreen < flutuantes.
+        # Só reenvia requests quando a ordem desejada realmente muda.
+        ordem = {wid: i for i, wid in enumerate(self.mru)}
+        stack_clients = ([c for c in visible if not c.floating and not c.fullscreen] +
+                         [c for c in visible if c.fullscreen] +
+                         sorted((c for c in visible if c.floating),
+                                key=lambda c: ordem.get(c.wid, -1)))
+        stack_order = tuple(c.wid for c in stack_clients)
+        if stack_order != self._stack_order_cache:
+            try:
+                for c in stack_clients:
                     c.window.configure(stack_mode=X.Above)
-            for c in visible:
-                if c.fullscreen:
-                    c.window.configure(stack_mode=X.Above)
-            ordem = {wid: i for i, wid in enumerate(self.mru)}
-            for c in sorted((c for c in visible if c.floating), key=lambda c: ordem.get(c.wid, -1)):
-                c.window.configure(stack_mode=X.Above)
-        except error.BadWindow:
-            pass
+                self._stack_order_cache = stack_order
+                self._stacking_dirty = True
+            except error.BadWindow:
+                self._stack_order_cache = None
         self._lower_desktop()
         self._update_client_list()
         self.dpy.flush()
@@ -693,23 +782,32 @@ class JWM:
         No X11 width/height são o tamanho interno e a borda é somada por fora; sem descontar
         2*border aqui, toda janela passaria da área que recebeu (alguns pixels à direita/embaixo)."""
         w, h = max(MIN_W, int(w)), max(MIN_H, int(h))
+        target = (int(x), int(y), w, h, int(border))
+        if c.applied_geom == target:
+            c.geom = target[:4]
+            return
         iw, ih = max(1, w - 2 * border), max(1, h - 2 * border)
         try:
-            # _place: tira o border_pixel do configure e pinta depois
-            c.window.configure(x=int(x), y=int(y), width=iw, height=ih, border_width=border)
-            c.window.change_attributes(border_pixel=self.pix_focus if c.wid == self.active else
-                                       (self.pix_float if c.floating else self.pix_border))
-            c.geom = (int(x), int(y), w, h)
+            # Evita configure() redundante: arraste e eventos de foco podem chamar
+            # arrange() muitas vezes com a mesma geometria.
+            c.window.configure(x=target[0], y=target[1], width=iw, height=ih,
+                               border_width=target[4])
+            c.applied_geom = target
+            c.geom = target[:4]
+            self._set_border(c)
         except error.BadWindow:
             pass
 
     # _set_border
     def _set_border(self, c: Client) -> None:
+        pixel = self.pix_focus if c.wid == self.active else (self.pix_float if c.floating else self.pix_border)
+        if self.mode and c.wid == self.active:
+            pixel = self.pix_mode
+        if c.applied_border == pixel:
+            return
         try:
-            pixel = self.pix_focus if c.wid == self.active else (self.pix_float if c.floating else self.pix_border)
-            if self.mode and c.wid == self.active:
-                pixel = self.pix_mode
             c.window.change_attributes(border_pixel=pixel)
+            c.applied_border = pixel
         except error.BadWindow:
             pass
 
@@ -758,6 +856,9 @@ class JWM:
             # elevada aqui poderia ficar por cima de um diálogo flutuante.
             if c.floating:
                 c.window.configure(stack_mode=X.Above)
+                self._stack_order_cache = None
+                self._stacking_dirty = True
+                self._update_client_list()
             self.root.change_property(self.a["_NET_ACTIVE_WINDOW"], Xatom_window(), 32, [wid])
             if old is not None:
                 self._set_border(old)
@@ -839,6 +940,9 @@ class JWM:
         if self.active not in self.clients:
             return
         c = self.clients[self.active]
+        if mask & (X.CWSibling | X.CWStackMode):
+            self._stack_order_cache = None
+            self._stacking_dirty = True
         if c.floating:
             x, y, w, h = c.geom
             if direction == "left": w -= RESIZE_STEP
@@ -1204,6 +1308,21 @@ class JWM:
                 c.fullscreen = want
                 self.arrange()
 
+    def _send_configure_notify(self, c: Client) -> None:
+        """Informa ao cliente a geometria efetiva quando o WM controla o layout (ICCCM)."""
+        x, y, outer_w, outer_h = c.geom
+        border = c.applied_geom[4] if c.applied_geom else BORDER
+        event = xevent.ConfigureNotify(
+            event=c.window, window=c.window, above_sibling=X.NONE,
+            x=int(x), y=int(y), width=max(1, int(outer_w - 2 * border)),
+            height=max(1, int(outer_h - 2 * border)), border_width=int(border),
+            override=False,
+        )
+        try:
+            c.window.send_event(event, event_mask=X.StructureNotifyMask, propagate=False)
+        except error.BadWindow:
+            pass
+
     def _configure_request(self, ev) -> None:
         wid = ev.window.id
         if self.desktop_id and wid == self.desktop_id:
@@ -1223,6 +1342,9 @@ class JWM:
             except error.BadWindow:
                 pass
             return
+        if mask & (X.CWSibling | X.CWStackMode):
+            self._stack_order_cache = None
+            self._stacking_dirty = True
         if c.floating:
             x, y, w, h = c.geom
             c.geom = (values.get("x", x), values.get("y", y),
@@ -1230,6 +1352,8 @@ class JWM:
             c.monitor = self._monitor_for_point(c.geom[0] + c.geom[2] // 2,
                                                 c.geom[1] + c.geom[3] // 2)
         self.arrange()
+        if wid in self.clients:
+            self._send_configure_notify(self.clients[wid])
 
     def _handle(self, ev) -> None:
         if ev.type == X.MapRequest:
@@ -1260,7 +1384,17 @@ class JWM:
                     self.focus(wid)
             # O JDesk não recebe foco ao mero movimento do ponteiro; use clique ou atalho.
         elif ev.type == X.MotionNotify:
-            self._motion(ev)
+            # Descarta movimentos intermediários já enfileirados; preserva eventos
+            # não relacionados em fila para serem tratados na ordem original.
+            latest = ev
+            while self.dpy.pending_events():
+                queued = self.dpy.next_event()
+                if queued.type == X.MotionNotify:
+                    latest = queued
+                else:
+                    self._deferred_events.append(queued)
+                    break
+            self._motion(latest)
         elif ev.type == X.ButtonRelease:
             if self.drag:
                 self.drag = None
@@ -1278,26 +1412,42 @@ class JWM:
             self._client_message(ev)
         elif ev.type == X.ConfigureNotify and ev.window.id == self.root.id:
             self._refresh_size()
-            self._refresh_monitors()
-            self._place_desktop()
-            self.arrange()
+            self._poll_outputs()
+        elif _randr is not None and ev.type in (
+                self.dpy.extension_event.ScreenChangeNotify,
+                self.dpy.extension_event.CrtcChangeNotify,
+                self.dpy.extension_event.OutputChangeNotify):
+            self._refresh_size()
+            try:
+                self._poll_outputs()
+            except Exception:
+                log.exception("Erro ao processar evento RandR")
 
     def run(self) -> None:
         """Dorme em select() até chegar evento do X (ou até a próxima checagem de monitores):
         o WM parado não gasta CPU, e um erro num evento não derruba a sessão."""
         fd = self.dpy.fileno()
-        next_poll = time.monotonic() + HOTPLUG_POLL
+        poll_interval = 30.0 if self._randr_enabled else HOTPLUG_POLL
+        next_poll = time.monotonic() + poll_interval
         try:
             while self.running:
-                while self.dpy.pending_events():
+                while self._deferred_events or self.dpy.pending_events():
                     try:
-                        self._handle(self.dpy.next_event())
+                        ev = self._deferred_events.pop(0) if self._deferred_events else self.dpy.next_event()
+                        self._handle(ev)
                     except Exception:
                         log.exception("Erro ao tratar evento do X11 (ignorado)")
                     if not self.running:
                         break
                 if not self.running:
                     break
+                if self._pending_sig is not None:
+                    next_poll = min(next_poll, time.monotonic() + 0.4)
+                # Durante arraste, envia as últimas alterações de geometria antes de
+                # dormir novamente em select(); evita depender de outro evento X11
+                # para descarregar o buffer de requisições.
+                if self.drag:
+                    self.dpy.flush()
                 self._write_state()
                 now = time.monotonic()
                 if now >= next_poll:
@@ -1305,7 +1455,7 @@ class JWM:
                         self._poll_outputs()
                     except Exception:
                         log.exception("Erro ao checar monitores (ignorado)")
-                    next_poll = time.monotonic() + (0.3 if self._layout_proc else HOTPLUG_POLL)
+                    next_poll = time.monotonic() + (0.3 if self._layout_proc else poll_interval)
                     continue
                 select.select([fd], [], [], max(0.01, next_poll - now))
         except KeyboardInterrupt:
