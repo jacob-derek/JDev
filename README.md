@@ -23,7 +23,7 @@ Grátis, aberto e independente (licença MIT). Testado no **Void Linux**.
 | **JShell** | Shell interativo com prompt em pílulas, realce e sugestões |
 | **JFiles** | Gerenciador de arquivos no terminal, com prévia |
 | **JRun** | Executor de comandos (`Super+D`) |
-| **jtheme** | Temas: Tokyo Night, Catppuccin Mocha, Gruvbox Dark e Dawn (claro) |
+| **jtheme** | Temas: Tokyo Night, Catppuccin Mocha, Gruvbox Dark, Dawn (claro) e Ashes |
 
 Bibliotecas internas: `jtile.py` (mosaico), `jipc.py` (mensagens entre os programas), `jicons.py` (ícones).
 Ferramentas opcionais ficam em `tools/` (JClass, JSlides, JPlayer...).

@@ -4,9 +4,9 @@ JDesk - ambiente de terminal com vários painéis (Fases 1-4).
 
   [ workspaces |      hora      | vol · ram · net · cpu ]
   [                    JFILES                    ]
-  [ JSHELL ]       [ JCODE ]       [ JCLASS ]
+       [ JSHELL ]            [ JCODE ]
 
-Cada workspace tem seus próprios 4 painéis e proporções; é criado só na primeira vez
+Cada workspace tem seus próprios 3 painéis e proporções; é criado só na primeira vez
 que você entra nele (os programas só sobem ali).
 
 Navegação no estilo do sway (o $mod aqui é o Alt; o WM usa o Super):
@@ -26,7 +26,7 @@ Navegação no estilo do sway (o $mod aqui é o Alt; o WM usa o Super):
     Teclas de mídia (sem modificador): volume, mudo e brilho, como no sway.
     Alt+= / Alt+- / Alt+m             volume +5% / -5% / mudo (para teclados sem teclas de mídia)
 
-Visualizador (JSlides): arquivos .pptx/.ppt/.odp/.pdf pedidos pelo JFiles/JClass/JShell abrem
+Visualizador (JSlides): arquivos .pptx/.ppt/.odp/.pdf pedidos pelo JFiles/JShell abrem
 num painel que cobre o workspace; Esc ou q fecha e devolve o foco.
 
 Dentro de cada painel valem os atalhos do JTerm (Ctrl+Shift+C/V, Shift+PgUp,
@@ -50,7 +50,7 @@ try:
 except ImportError:  # JSlides.py ausente: os arquivos caem no comportamento antigo
     SlidesPane = None
 
-ORDER = ["jfiles", "jshell", "jcode", "jclass"]  # ocupação inicial dos slots: 0 = topo, 1..3 = linha de baixo
+ORDER = ["jfiles", "jshell", "jcode"]  # ocupação inicial dos slots: 0 = topo, 1.. = linha de baixo
 N_WS = 4   # quantidade de workspaces (Alt+1..N)
 
 MIN_ROW, MAX_ROW = 0.20, 0.80
@@ -104,14 +104,13 @@ def comandos():
         "jfiles": programa("JFiles.py"),
         "jshell": programa("JShell.py"),
         "jcode": programa("JCode.py"),  # sem argumentos: modo idle, espera o "open" do jipc
-        "jclass": programa("JClass.py"),
     }
 
 
 class Workspace:
-    """Um conjunto de 4 painéis com layout próprio (criado sob demanda).
+    """Um conjunto de 3 painéis com layout próprio (criado sob demanda).
 
-    O layout é feito de *slots* (0 = linha de cima, 1..3 = linha de baixo). Cada slot guarda o
+    O layout é feito de *slots* (0 = linha de cima, 1..2 = linha de baixo). Cada slot guarda o
     nome de um painel; mover um painel é trocar o conteúdo de dois slots, sem reiniciar nada."""
 
     def __init__(self, desk, index):
@@ -120,7 +119,7 @@ class Workspace:
         self.frame = tk.Frame(desk.area, bg=DESK_BG, bd=0, highlightthickness=0)
         self.slots = list(ORDER)
         self.row_split = 0.60                  # fração da altura ocupada pelo slot de cima
-        self.col_w = [0.30, 0.40, 0.30]        # larguras dos 3 slots de baixo
+        self.col_w = [0.50, 0.50]              # larguras dos slots de baixo
         self.maximized = None
         self.active = None
         self.last_slot = 1                     # último slot de baixo focado (para ir "para baixo")
@@ -156,7 +155,7 @@ class Workspace:
         h = self.row_split
         r = {self.slots[0]: (0.0, 0.0, 1.0, h)}
         x = 0.0
-        for s in (1, 2, 3):
+        for s in range(1, len(self.slots)):
             w = self.col_w[s - 1]
             r[self.slots[s]] = (x, h, w, 1.0 - h)
             x += w
@@ -212,7 +211,7 @@ class Workspace:
             return 0
         if direcao == "left" and s > 1:
             return s - 1
-        if direcao == "right" and s < 3:
+        if direcao == "right" and s < len(self.slots) - 1:
             return s + 1
         return None
 
@@ -253,7 +252,7 @@ class Workspace:
         if largura and s > 0:
             d = STEP * largura
             i = s - 1
-            j = i + 1 if i < 2 else i - 1     # o vizinho absorve a diferença
+            j = i + 1 if i < len(self.col_w) - 1 else i - 1     # o vizinho absorve a diferença
             if self.col_w[i] + d >= MIN_COL and self.col_w[j] - d >= MIN_COL:
                 self.col_w[i] += d
                 self.col_w[j] -= d
