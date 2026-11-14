@@ -10,7 +10,13 @@ JBar - barra superior do JDesk (Fase 2).
   disponível, mostra "--" sem reclamar.
 
 Roda sozinho para teste:  python JBar.py
+
+Modo clean do JWM (jwm --no-ui):  python JBar.py --solo --wm-pid N
+  A barra vira uma janela própria (sem moldura, que o JWM nem gerencia) na faixa reservada do
+  rodapé do monitor primário. Posição, visibilidade (Super+Shift+B) e workspaces vêm do
+  ~/.cache/jwm-state.json; clicar num número pede o workspace ao JWM (EWMH _NET_CURRENT_DESKTOP).
 """
+import argparse
 import json
 import locale
 import os
@@ -151,6 +157,26 @@ def mudar_layout(proximo: str | None = None) -> str:
 def em_thread(fn, *args):
     """Roda fn fora da thread da interface (pactl pode demorar e congelaria o Tk)."""
     threading.Thread(target=fn, args=args, daemon=True).start()
+
+
+def pedir_workspace(i):
+    """Pede ao JWM (mensagem EWMH _NET_CURRENT_DESKTOP) para ir ao workspace i (0-based)."""
+    def _enviar():
+        try:
+            from Xlib import X, display, protocol
+            d = display.Display()
+            try:
+                raiz = d.screen().root
+                ev = protocol.event.ClientMessage(
+                    window=raiz, client_type=d.intern_atom("_NET_CURRENT_DESKTOP"),
+                    data=(32, [int(i), X.CurrentTime, 0, 0, 0]))
+                raiz.send_event(ev, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+                d.flush()
+            finally:
+                d.close()
+        except Exception:   # sem python-xlib ou sem X: o clique simplesmente não faz nada
+            pass
+    em_thread(_enviar)
 
 
 def _osascript():
@@ -331,7 +357,8 @@ class StatusBar(tk.Canvas):
     TAB_W = round(BAR_FONT * 2.6)
     PAD = round(BAR_FONT * 0.9)
 
-    def __init__(self, parent, n_ws, on_select, on_visibilidade=None):
+    def __init__(self, parent, n_ws, on_select, on_visibilidade=None, on_estado=None, solo=False,
+                 pid_esperado=None):
         super().__init__(parent, bg=BAR_BG, height=self.HEIGHT, bd=0, highlightthickness=0)
         try:
             locale.setlocale(locale.LC_TIME, "")  # dia/mês no idioma do sistema
@@ -343,6 +370,9 @@ class StatusBar(tk.Canvas):
         self.n_ws = n_ws
         self.on_select = on_select
         self.on_visibilidade = on_visibilidade
+        self.on_estado = on_estado          # chamado com o estado do JWM a cada mudança (modo solo)
+        self.solo = solo                    # janela própria: workspaces e posição vêm do jwm-state.json
+        self.pid_esperado = pid_esperado    # só aceita o estado escrito por ESTE JWM (ignora arquivo velho)
         self.metrics = None
         self.job = None
         self.job_estado = None
@@ -412,16 +442,25 @@ class StatusBar(tk.Canvas):
                     try:
                         with open(path, encoding="utf-8") as f:
                             lido = json.load(f)
-                        if _pid_vivo(lido.get("pid")):   # arquivo velho de outra sessão é ignorado
-                            novo = lido
+                        if _pid_vivo(lido.get("pid")) and self.pid_esperado in (None, lido.get("pid")):
+                            novo = lido   # arquivo velho de outra sessão é ignorado
                     except (OSError, ValueError):
                         novo = {}
                 self.estado = novo
+                if self.solo and novo:
+                    try:
+                        self.n_ws = int(novo.get("n_ws", self.n_ws))
+                        self.current = int(novo.get("ws", self.current + 1)) - 1   # "ws" é 1-based
+                        self.created = {int(i) for i in novo.get("ws_used", ())}   # 0-based
+                    except (TypeError, ValueError):
+                        pass
                 visivel = bool(novo.get("bar", True))
                 if visivel != self._visivel:
                     self._visivel = visivel
                     if self.on_visibilidade:
                         self.on_visibilidade(visivel)
+                if self.on_estado:
+                    self.on_estado(novo)
                 self._render()
         except tk.TclError:
             return
@@ -490,7 +529,7 @@ class StatusBar(tk.Canvas):
         modo_wm = est.get("mode")
         split = est.get("split")
         titulo = "" if compact else (est.get("title") or "")
-        sig = (W, self.current, tuple(sorted(self.created)), self.modo, modo_wm, split, titulo, self._hover, d.get("kbd"),
+        sig = (W, self.n_ws, self.current, tuple(sorted(self.created)), self.modo, modo_wm, split, titulo, self._hover, d.get("kbd"),
                tuple(tuple(s) for _k, s in right), tuple(clock))
         if not force and sig == self._sig:
             return
@@ -604,7 +643,72 @@ class StatusBar(tk.Canvas):
         self.job = self.after(1000, self.refresh)
 
 
-if __name__ == "__main__":  # teste isolado da barra
+SOLO_CHECK_MS = 2000   # de quanto em quanto tempo confere se o JWM ainda existe
+
+
+def main_solo(wm_pid=None):
+    """JBar como janela própria (modo clean do JWM): sem moldura, na faixa do rodapé do monitor primário.
+
+    override_redirect: o JWM não gerencia a janela (sem foco, sem mosaico, sem borda). Quem decide
+    onde ela fica e se aparece é o JWM, pelo jwm-state.json (bar_rect e bar, este último com Super+Shift+B).
+    """
+    root = tk.Tk()
+    root.title("JBar")
+    root.configure(bg=BAR_BG)
+    root.overrideredirect(True)
+    try:
+        root.wm_attributes("-type", "dock")   # o picom não arredonda os cantos nem põe sombra em "dock"
+    except tk.TclError:
+        pass
+    root.withdraw()
+    metrics = Metrics()
+    metrics.start()
+    ctl = {"rect": None, "visivel": False}
+
+    def aplicar(est):
+        rect = est.get("bar_rect")
+        try:
+            x, y, w, h = (int(v) for v in rect)
+        except (TypeError, ValueError):
+            rect = None
+        if not est.get("bar", True) or rect is None:
+            if ctl["visivel"]:
+                root.withdraw()
+                ctl["visivel"] = False
+            return
+        if [x, y, w, h] != ctl["rect"]:
+            root.geometry(f"{w}x{h}+{x}+{y}")
+            ctl["rect"] = [x, y, w, h]
+        if not ctl["visivel"]:
+            root.deiconify()
+            root.lift()
+            ctl["visivel"] = True
+
+    barra = StatusBar(root, 4, pedir_workspace, on_estado=aplicar, solo=True, pid_esperado=wm_pid)
+    barra.pack(fill=tk.BOTH, expand=True)
+    barra.start(metrics)
+
+    def sair():
+        barra.stop()
+        metrics.stop()
+        root.destroy()
+
+    def vigiar():
+        if wm_pid is not None and not _pid_vivo(wm_pid):   # o JWM acabou: a barra não fica órfã
+            sair()
+            return
+        root.after(SOLO_CHECK_MS, vigiar)
+
+    root.after(SOLO_CHECK_MS, vigiar)
+    root.mainloop()
+
+
+if __name__ == "__main__" and "--solo" in sys.argv:
+    _ap = argparse.ArgumentParser()
+    _ap.add_argument("--solo", action="store_true")
+    _ap.add_argument("--wm-pid", type=int, default=None)
+    main_solo(_ap.parse_args().wm_pid)
+elif __name__ == "__main__":  # teste isolado da barra
     root = tk.Tk()
     root.title("JBar")
     root.geometry("900x60")
