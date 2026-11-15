@@ -11,7 +11,7 @@ Atalhos principais:
   Ctrl+O sumário · Ctrl+E explorar (setas ignoram o autocomplete) · Ctrl+L selecionar linhas
   Ctrl+K apagar linha · Ctrl+A selecionar tudo · Ctrl+C/V copiar/colar
   Tab/Shift+Tab indentar/recuar · Alt+Backspace apagar palavra
-  F2 mapa do arquivo (clique para pular) · F3 quebra de linha visual
+  F2 mapa do arquivo (clique para pular) · F3 quebra de linha visual · F4 auto-fechar ( [ { " '
 """
 import ast
 import asyncio
@@ -124,6 +124,7 @@ ANALISE_DEBOUNCE_MAX = 2.0
 ORCAMENTO_UNDO_CHARS = 100_000_000  # memória máxima (em caracteres) do histórico de undo
 ESC_TIMEOUT = 0.05                # espera para distinguir Esc de Alt+tecla/setas
 MOUSE_ATIVO = True
+EXT_SEM_AUTO_FECHAR = {".txt", ".md", ".markdown", ".rst"}  # prosa: aspas e parênteses ficam como digitados
 EXT_SEM_LIMPEZA = {".md", ".markdown"}  # nelas dois espaços no fim da linha significam quebra de linha
 
 # Mapa do arquivo (minimapa): cada célula de braille tem 2x4 pontos.
@@ -339,6 +340,83 @@ def tab_ignorar(linha: str, coluna: int) -> bool:
     """
     coluna = max(0, min(coluna, len(linha)))
     return not linha[coluna:].strip() and bool(linha[:coluna].strip())
+
+
+# ── Auto-fechar pares ( ) [ ] { } " ' ───────────────────────────────────────────
+_ABRE = {"(": ")", "[": "]", "{": "}"}
+_FECHA = {v: k for k, v in _ABRE.items()}
+_PARES_VAZIOS = {("(", ")"), ("[", "]"), ("{", "}"), ('"', '"'), ("'", "'")}
+_PREFIXOS_STR = {"f", "r", "b", "u", "rb", "br", "fr", "rf"}
+RE_PREFIXO_STR = re.compile(r"(?<!\w)([A-Za-z]{1,2})$")
+
+
+def _livre_a_direita(proximo: str) -> bool:
+    """Só fecha automaticamente se a direita do cursor está livre (fim, espaço ou outro fechamento)."""
+    return proximo == "" or proximo.isspace() or proximo in ")]},;:"
+
+
+def decidir_auto_fechar(c: str, antes: str, depois: str) -> Tuple[str, str, int]:
+    """O que fazer ao digitar `c`. Devolve (acao, texto, recuo):
+
+      ("normal", c, 0)        insere só o caractere
+      ("inserir", texto, n)   insere `texto` e volta o cursor `n` casas (par: "()" com cursor no meio)
+      ("pular", "", 0)        o caractere já está à direita: só anda por cima dele
+
+    `antes` é o trecho antes do cursor (basta o final) e `depois` o começo do que vem depois.
+    Na dúvida devolve "normal": o pior caso é o editor se comportar como sempre.
+    """
+    prox = depois[:1]
+    if c in _ABRE:
+        return ("inserir", c + _ABRE[c], 1) if _livre_a_direita(prox) else ("normal", c, 0)
+    if c in _FECHA:
+        if prox == c and antes.count(_FECHA[c]) > antes.count(c):   # há um abre esperando
+            return ("pular", "", 0)
+        return ("normal", c, 0)
+    if c in "\"'":
+        linha = antes.rsplit("\n", 1)[-1]
+        anterior = linha[-1:]
+        if anterior == "\\":                      # aspa escapada
+            return ("normal", c, 0)
+        dentro = linha.count(c) % 2 == 1        # já há uma aspa igual aberta nesta linha
+        if dentro:
+            return ("pular", "", 0) if prox == c else ("normal", c, 0)
+        if linha.endswith(c * 2) and not linha.endswith(c * 3) and _livre_a_direita(prox):
+            return ("inserir", c * 4, 3)         # terceira aspa: abre """ ... """
+        if anterior.isalnum() or anterior == "_":   # don't, it's... (exceto prefixos f"", r'', b"")
+            m = RE_PREFIXO_STR.search(linha)
+            if not (m and m.group(1).lower() in _PREFIXOS_STR):
+                return ("normal", c, 0)
+        outra = "'" if c == '"' else '"'
+        if linha.count(outra) % 2 == 1:         # aspa de outro tipo aberta: esta é texto
+            return ("normal", c, 0)
+        return ("inserir", c + c, 1) if _livre_a_direita(prox) else ("normal", c, 0)
+    return ("normal", c, 0)
+
+
+def par_vazio(antes: str, depois: str) -> bool:
+    """True se o cursor está entre um par vazio: () [] {} "" ''."""
+    return (antes[-1:], depois[:1]) in _PARES_VAZIOS
+
+
+def ignorar_sequencias_modificadas() -> int:
+    """Teclas combinadas desconhecidas (Ctrl+PageUp, Shift+F5...) viram <ignore> em vez de texto.
+
+    O terminal manda algo como ESC [ 5 ; 5 ~ ; se o prompt_toolkit não conhece a sequência,
+    ela chegava ao editor como os caracteres "[5;5~". Devolve quantas sequências foram adicionadas.
+    """
+    try:
+        from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
+    except ImportError:
+        return 0
+    novos = 0
+    for mod in range(2, 9):
+        candidatas = [f"\x1b[1;{mod}{letra}" for letra in "ABCDHFPQRS"]
+        candidatas += [f"\x1b[{n};{mod}~" for n in (2, 3, 5, 6, 7, 8, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 23, 24)]
+        for seq in candidatas:
+            if seq not in ANSI_SEQUENCES:
+                ANSI_SEQUENCES[seq] = Keys.Ignore
+                novos += 1
+    return novos
 
 
 def perfil_linhas(texto: str, px: int = MAPA_COLUNAS * 2, chars: int = MAPA_CHARS_POR_PX) -> List[int]:
@@ -828,6 +906,8 @@ def editar(arg_caminho: str) -> None:
     outline = {"visivel": False, "foco": False, "itens": [], "indice": 0}
     mapa = {"visivel": True}
     quebra = {"ativa": True}
+    auto = {"ativo": extensao not in EXT_SEM_AUTO_FECHAR}
+    csi = {"ativo": False, "ate": 0.0}     # descarta restos de sequências de tecla desconhecidas
     cache_mapa = {"perfil": None, "altura": 0, "linhas": []}
 
     buffer = Buffer(
@@ -856,6 +936,8 @@ def editar(arg_caminho: str) -> None:
     cond_normal = Condition(lambda: cond_editor() and not selecao_linha["ativa"] and not modo_explorar["ativo"])
     cond_tem_selecao = Condition(lambda: buffer.selection_state is not None)
     cond_selecao_linha = Condition(lambda: selecao_linha["ativa"])
+    cond_auto = Condition(lambda: cond_normal() and auto["ativo"] and buffer.selection_state is None)
+    cond_csi = Condition(lambda: csi["ativo"] and time.monotonic() < csi["ate"])
 
     def atalho(*keys, filter=None, eager=False):
         """Registra um atalho; qualquer exceção vira aviso na barra + log, nunca derruba o editor."""
@@ -1004,6 +1086,14 @@ def editar(arg_caminho: str) -> None:
     def enter_editor(event):
         buf = event.current_buffer
         doc = buf.document
+        col = doc.cursor_position_col
+        if auto["ativo"] and (doc.current_line[col - 1:col], doc.current_line[col:col + 1]) in (("(", ")"), ("[", "]"), ("{", "}")):
+            # Enter entre um par vazio: abre o bloco com o fechamento embaixo
+            base = _indentacao_inicial(doc.current_line[:col])
+            fundo = base + ("\t" if "\t" in base else INDENT)
+            buf.insert_text("\n" + fundo + "\n" + base)
+            buf.cursor_position -= len(base) + 1
+            return
         if extensao == ".py":
             indent = calcular_indentacao_enter(doc.current_line, doc.cursor_position_col)
         else:
@@ -1345,6 +1435,57 @@ def editar(arg_caminho: str) -> None:
     @atalho("escape", filter=cond_outline_foco, eager=True)
     def outline_fechar(event):
         fechar_outline()
+
+    # ── Auto-fechar pares, backspace em par vazio, digitação segura ───────────
+    def registrar_auto(c: str) -> None:
+        @atalho(c, filter=cond_auto)
+        def _auto(event):
+            buf = event.current_buffer
+            pos = buf.cursor_position
+            acao, texto, recuo = decidir_auto_fechar(c, buf.text[max(0, pos - 4000):pos], buf.text[pos:pos + 3])
+            if acao == "pular":
+                buf.cursor_position = pos + 1
+            else:
+                buf.insert_text(texto)
+                if recuo:
+                    buf.cursor_position -= recuo
+
+    for _c in "([{)]}\"'":
+        registrar_auto(_c)
+
+    @atalho("backspace", filter=cond_auto)
+    def apagar_par_vazio(event):
+        buf = event.current_buffer
+        pos = buf.cursor_position
+        if pos > 0 and par_vazio(buf.text[pos - 1:pos], buf.text[pos:pos + 1]):
+            buf.delete_before_cursor(1)
+            buf.delete(1)
+        else:
+            buf.delete_before_cursor(count=event.arg)
+
+    @atalho("f4", filter=cond_atalho_global)
+    def alternar_auto_fechar(event):
+        auto["ativo"] = not auto["ativo"]
+        avisar("Auto-fechar: " + ("ligado" if auto["ativo"] else "desligado"), 2.0)
+
+    # Só texto de verdade entra no buffer: teclas combinadas sem ação (Ctrl+PageUp...) não viram "^[[5;5~".
+    @atalho(Keys.Any, filter=cond_editor)
+    def inserir_texto(event):
+        dados = event.data
+        if dados and dados.isprintable():
+            event.current_buffer.insert_text(dados * event.arg)
+
+    # Resto de sequência de tecla que nenhuma camada reconheceu (ESC [ 5 ; 5 ~): descarta até o fim dela.
+    @atalho("escape", "[", filter=cond_atalho_global, eager=True)
+    def iniciar_descarte_csi(event):
+        csi.update(ativo=True, ate=time.monotonic() + 0.25)
+
+    @atalho(Keys.Any, filter=cond_csi, eager=True)
+    def descartar_csi(event):
+        dados = event.data or ""
+        csi["ate"] = time.monotonic() + 0.25
+        if len(dados) == 1 and "@" <= dados <= "~":   # byte final da sequência
+            csi["ativo"] = False
 
     # ── Layout ────────────────────────────────────────────────────────────────
     try:
@@ -1758,6 +1899,7 @@ def tela_idle(ultimo: Optional[str]) -> Optional[str]:
 
 
 def main() -> None:
+    ignorar_sequencias_modificadas()
     args = sys.argv[1:]
     # Só o painel "jcode" do JDesk vira um editor residente (idle + recebe pedidos).
     # Um JCode aberto pelo JShell/JFiles dentro do JDesk continua efêmero, como sempre.

@@ -3,6 +3,24 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e versionamento
 semântico (`MAJOR.MINOR.PATCH`).
 
+<<<<<<< HEAD
+=======
+## [Não lançado]
+
+### Adicionado
+- **Fonte única** (`jtheme.py`): `JFONT=nome` ou `~/.config/jdev/font` escolhem a fonte de JTerm, JBar e JRun.
+  Sem pedido, vale a primeira instalada entre JetBrains Mono, Iosevka, Commit Mono e DejaVu Sans Mono.
+- **Tema Void**: preto de verdade (`python3 jtheme.py set void`).
+- `jwm-session` ajusta o Xft (hinting leve, antialias) pelo `xrdb`; `JWM_XFT=0` desliga.
+- **JCode**: espaços no fim das linhas são removidos ao salvar (Ctrl+Z desfaz; `.md` fica de fora; a linha do cursor é poupada).
+- **JCode**: quebra de linha visual (`F3` liga/desliga), com a continuação indentada e marcada com `›`.
+- **JCode**: mapa do arquivo à direita (`F2`), em braille, com a janela visível, o cursor, `def`/`class` e erro de sintaxe destacados; clicar pula para o trecho.
+
+### Alterado
+- JCode: Tab no fim de uma linha que já tem código é ignorado (em linha vazia continua indentando).
+- JTerm: respiro interno de 12 px (`JTERM_PAD=8` volta ao antigo) e cabeçalho dos painéis em fonte monoespaçada.
+
+>>>>>>> JCode: limpa espaços ao salvar, Tab no fim da linha, quebra visual e mapa do arquivo
 ## [1.0.0] - 2026-11-07
 
 Primeira versão oficial: estável, bonita e leve.
