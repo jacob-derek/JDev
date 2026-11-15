@@ -2,10 +2,11 @@
 """
 JBar - barra superior do JDesk (Fase 2).
 
-  [ 1 2 3 4 ]            [ qui 15 out  14:32 ]            [ VOL 65%  RAM 42%  CPU 12% ]
+  [ 1 2 3 4 ]            [ qui 15 out  14:32 ]     [ ♪ artista - faixa  VOL 65%  RAM 42%  CPU 12% ]
 
 - As métricas são coletadas numa thread (nada de subprocess ou I/O na thread da UI).
 - psutil é opcional: sem ele, CPU/RAM/rede aparecem como "--" (o volume e o relógio seguem).
+- Tocando agora: playerctl (opcional). Clique pausa/retoma; roda do mouse troca de faixa.
 - Volume: pactl/amixer (Linux), pycaw (Windows), osascript (macOS). Se nada estiver
   disponível, mostra "--" sem reclamar.
 
@@ -121,6 +122,31 @@ def toggle_mute():
         pass
 
 
+def ler_tocando():
+    """(texto, tocando) da faixa atual via playerctl; None se não há playerctl, player ou faixa."""
+    if not shutil.which("playerctl"):
+        return None
+    try:
+        out = _run(["playerctl", "metadata", "--format", "{{status}}\t{{artist}}\t{{title}}"])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    status, _, resto = out.strip().partition("\t")
+    artista, _, titulo = resto.partition("\t")
+    if status not in ("Playing", "Paused") or not (artista or titulo):
+        return None
+    return (f"{artista} - {titulo}" if artista and titulo else (titulo or artista)), status == "Playing"
+
+
+def controlar_player(acao):
+    """acao: play-pause | next | previous."""
+    if shutil.which("playerctl"):
+        try:
+            subprocess.run(["playerctl", acao], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=1.0, check=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
 def brilho(delta):
     """Brilho da tela +5% / -5% (brightnessctl, como no sway antigo). Sem ele, não faz nada."""
     if shutil.which("brightnessctl"):
@@ -229,7 +255,7 @@ class Metrics:
         self.lock = threading.Lock()
         self.stop_ev = threading.Event()
         self.data = {"cpu": None, "ram": None, "down": None, "up": None,
-                     "vol": None, "muted": False, "kbd": ""}
+                     "vol": None, "muted": False, "kbd": "", "play": None}
 
     def start(self):
         threading.Thread(target=self._run_loop, daemon=True).start()
@@ -247,6 +273,7 @@ class Metrics:
         except ImportError:
             psutil = None
         readers = make_volume_readers()  # na própria thread (COM no Windows)
+        tem_player = bool(shutil.which("playerctl"))
         net_prev = None
         if psutil:
             psutil.cpu_percent(None)  # a primeira chamada só marca o ponto de partida
@@ -285,6 +312,7 @@ class Metrics:
                     if i:  # promove o leitor que funcionou
                         readers.insert(0, readers.pop(i))
                     break
+            d["play"] = ler_tocando() if tem_player else None
             # Layout de teclado: polling mais lento (a cada 5 ciclos ~5 s)
             kbd_tick += 1
             if kbd_tick >= 5:
@@ -325,6 +353,12 @@ def barra(pct):
     if pct is None:
         return "·"
     return BLOCOS[max(0, min(7, int(pct / 12.5)))]
+
+
+def curto(texto, n):
+    """Texto numa linha só, com no máximo n caracteres (termina em … se cortou)."""
+    texto = " ".join(str(texto).split())
+    return texto if len(texto) <= n else texto[: max(1, n - 1)].rstrip() + "…"
 
 
 def pct_txt(v):
@@ -525,6 +559,11 @@ class StatusBar(tk.Canvas):
             v = d.get(key)
             right.append((key, [(f"{nome} ", DIM, False),
                                 (f"{barra(v)} {pct_txt(v):>4}", level_color(v), False)]))
+        play = d.get("play")
+        if play and W >= 1400:   # só com espaço de sobra: o relógio nunca é espremido
+            texto_faixa, tocando = play
+            right.insert(0, ("play", [("♪ " if tocando else "‖ ", GREEN if tocando else DIM, False),
+                                      (curto(texto_faixa, 26), FG, False)]))
         clock = ([] if compact else [(data + "  ", DIM, False)]) + [(hora, FG, True)]
         modo_wm = est.get("mode")
         split = est.get("split")
@@ -574,7 +613,7 @@ class StatusBar(tk.Canvas):
             w = self._medir(segs) + 2 * self.PAD
             x -= w
             self._hits.append((x, x + w, key, None))
-            self._capsula(x, x + w, y1, y2, PILL_HOVER if (key == "vol" and self._hover == ("vol", None)) else PILL_BG)
+            self._capsula(x, x + w, y1, y2, PILL_HOVER if (key in ("vol", "play") and self._hover == (key, None)) else PILL_BG)
             self._texto(x + self.PAD, cy, segs)
             x -= GAP
         direita_ini = x + GAP
@@ -613,7 +652,7 @@ class StatusBar(tk.Canvas):
 
     def _on_motion(self, e):
         h = self._hit_em(e.x)
-        self._set_hover(h if h and h[0] in ("tab", "vol", "kbd") else None)
+        self._set_hover(h if h and h[0] in ("tab", "vol", "kbd", "play") else None)
 
     def _on_click(self, e):
         h = self._hit_em(e.x)
@@ -625,13 +664,15 @@ class StatusBar(tk.Canvas):
             em_thread(toggle_mute)
         elif h[0] == "kbd":
             em_thread(lambda: mudar_layout())
+        elif h[0] == "play":
+            em_thread(controlar_player, "play-pause")
 
     def _on_scroll(self, e, direcao):
         h = self._hit_em(e.x)
         if h and h[0] == "vol":
             em_thread(adjust_volume, direcao)
-        elif h and h[0] == "kbd":
-            pass  # scroll nao muda teclado
+        elif h and h[0] == "play":
+            em_thread(controlar_player, "next" if direcao > 0 else "previous")
 
     # ── atualização (só lê o snapshot; nada bloqueante aqui) ──
     def refresh(self):
