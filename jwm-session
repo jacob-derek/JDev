@@ -2,6 +2,12 @@
 set -eu
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
+# Barramento D-Bus de sessão: o JToast (e qualquer app que mande notificação) precisa dele. Sem ele
+# o Xorg sobe "pelado". Se faltar, reexecuta esta mesma sessão dentro de um dbus-run-session.
+if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] && [ -z "${JWM_DBUS:-}" ] && command -v dbus-run-session >/dev/null 2>&1; then
+    JWM_DBUS=1 exec dbus-run-session -- sh "$HERE/jwm-session" "$@"
+fi
+
 # Dentro do startx não há terminal para ver erros: tudo que importa vai para este log.
 LOG=${XDG_CACHE_HOME:-$HOME/.cache}/jwm-session.log
 mkdir -p "$(dirname -- "$LOG")" 2>/dev/null || true
@@ -33,6 +39,13 @@ elif ! pgrep -x picom >/dev/null 2>&1; then
         printf '%s %s\n' "$(date '+%F %T')" "picom (glx) falhou; tentando xrender" >> "$LOG" 2>/dev/null || true
         picom --config "$PICOM_CONF" --backend xrender >> "$LOG" 2>&1 &
     fi
+fi
+
+# Notificações (JToast): opcional. Sem o jeepney ou sem barramento, só registra no log e segue.
+if [ -f "$HERE/JToast.py" ] && [ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ] && python3 -c 'import jeepney' >/dev/null 2>&1; then
+    python3 "$HERE/JToast.py" >> "$LOG" 2>&1 &
+else
+    printf '%s %s\n' "$(date '+%F %T')" "JToast não iniciado (sem D-Bus de sessão ou sem jeepney)" >> "$LOG" 2>/dev/null || true
 fi
 
 exec python3 "$HERE/JWM.py" "$@"
