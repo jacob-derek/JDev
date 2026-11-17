@@ -19,8 +19,15 @@ Uso:
 Atalhos:
     Ctrl+Shift+C / Ctrl+Insert   copiar (Ctrl+C copia se houver seleção)
     Ctrl+Shift+V / Shift+Insert  colar (botão direito: copia se houver seleção, senão cola)
+    Ctrl+Shift+A                 seleciona tudo (histórico + tela)
     Shift+PageUp / Shift+PageDown, roda do mouse   histórico (scrollback)
     Ctrl + roda do mouse         zoom da fonte
+
+Seleção com o mouse (guardada em linhas absolutas do histórico, então sobrevive à rolagem):
+    arrastar                     seleciona; arrastar para fora da janela rola sozinho
+    roda do mouse enquanto arrasta   continua a seleção
+    Shift + clique               estende a seleção existente (clique, role, Shift+clique no fim)
+    duplo clique / triplo clique palavra / linha
 """
 import codecs
 import os
@@ -31,6 +38,7 @@ import sys
 import threading
 import time
 import tkinter as tk
+import unicodedata
 from tkinter import font, messagebox
 
 import pyte
@@ -45,6 +53,8 @@ BUSY_MS, IDLE_MS = 3, 10   # intervalo do ciclo com/sem saída
 MAX_TAGS = 1500            # limite de estilos distintos antes de limpar o cache
 FONT_MIN, FONT_MAX = 7, 32
 KEEP_OPEN_ON_ERROR = True  # se o processo sair com erro, mantém a janela para ler a mensagem
+AUTOSCROLL_MS = 45         # intervalo da rolagem automática ao arrastar a seleção para fora da janela
+WORD_STOP = set("()[]{}<>\"'`,;|&")   # separadores no duplo clique (além de espaços)
 
 # ── Tema Tokyo Night ─────────────────────────────────────────────────────────
 try:  # paleta única do JDev; opcional: sem o jtheme.py ao lado vale o Tokyo Night embutido
@@ -284,6 +294,21 @@ def _eh_emoji(c):
     return o >= 0x1F000 or 0x2600 <= o <= 0x27BF or 0x2B00 <= o <= 0x2BFF or o == 0xFE0F
 
 
+def _celulas(texto):
+    """Divide o texto de uma linha em células de terminal.
+    Caractere largo ocupa 2 células (a segunda é ""); combinantes ficam na célula anterior."""
+    cel = []
+    for c in texto:
+        if cel and (unicodedata.combining(c) or c in "\u200d\ufe0f"):
+            cel[-1] += c
+        elif unicodedata.east_asian_width(c) in ("W", "F"):
+            cel.append(c)
+            cel.append("")
+        else:
+            cel.append(c)
+    return cel
+
+
 class PtyPane(tk.Frame):
     """Um terminal completo (pty + pyte + Text) dentro de um Frame.
 
@@ -344,6 +369,23 @@ class PtyPane(tk.Frame):
         else:
             self.text.pack(fill=tk.BOTH, expand=True)
 
+        # Seleção própria (o "sel" nativo do Tk some quando o Text é redesenhado/rolado):
+        # guardada em (linha_absoluta, coluna). linha_absoluta = índice no histórico; as linhas da
+        # tela vêm depois (len(history) + y), e esse número não muda quando a linha vai para o histórico.
+        self.text.tag_configure("jsel", background=SELECT_BG, foreground=DEFAULT_FG)
+        self.sel_a = None         # início (ou âncora) da seleção
+        self.sel_b = None         # fim
+        self.sel_drag = False     # botão 1 pressionado
+        self.sel_mode = "char"    # "char" | "word" | "line"
+        self._anchor = None       # onde o arrasto começou
+        self._origin = None       # faixa inicial do duplo/triplo clique
+        self._ptr = (0, 0)        # último ponto do ponteiro durante o arrasto
+        self._scan_job = None     # rolagem automática
+        self._sel_dirty = False   # precisa repintar a seleção
+        self._sel_painted = False
+        self._primary_handler = False
+        self._primary_owned = False
+        self._primary_cache = (None, b"")
         self.tags = {}            # estilo -> nome da tag do Tk
         self.style_cache = {}     # (campos do Char, é_cursor) -> estilo
         self.color_cache = {}
@@ -364,7 +406,13 @@ class PtyPane(tk.Frame):
         self._new_emulator()
 
         self.text.bind("<Key>", self.on_key)
-        self.text.bind("<Button-1>", lambda e: self.text.focus_set())
+        self.text.bind("<Button-1>", self.on_press)
+        self.text.bind("<Double-Button-1>", self.on_double)
+        self.text.bind("<Triple-Button-1>", self.on_triple)
+        self.text.bind("<B1-Motion>", self.on_drag)
+        self.text.bind("<ButtonRelease-1>", self.on_release)
+        self.text.bind("<B1-Leave>", lambda e: "break")   # sem a rolagem automática nativa do Tk
+        self.text.bind("<B1-Enter>", lambda e: "break")
         self.text.bind("<Button-2>", lambda e: self.paste(primary=True))
         self.text.bind("<Button-3>", self.on_right_click)
         self.text.bind("<MouseWheel>", self.on_wheel)
@@ -383,6 +431,8 @@ class PtyPane(tk.Frame):
         self.alt_saved = None
         self.pending = ""         # sequência de escape cortada entre dois blocos
         self.last_cursor_y = 0
+        self.sel_a = self.sel_b = self._anchor = self._origin = None
+        self.sel_drag = False
         self.reset_text_lines()
 
     def start_process(self):
@@ -522,12 +572,88 @@ class PtyPane(tk.Frame):
         if not force and (rows, cols) == (self.rows, self.cols):
             return
         self.rows, self.cols = rows, cols
-        self.screen.resize(rows, cols)
+        self._resize_screen(rows, cols)
         if self.pty:
             self.pty.set_size(rows, cols)
         self.offset = min(self.offset, len(self.history))
+        self._sel_dirty = True
         self.reset_text_lines()
         self.safe_render()
+
+    # Redimensionamento da tela do pyte. O Screen.resize() do pyte tem dois problemas que
+    # bagunçam o prompt (o prompt_toolkit calcula tudo relativo ao cursor): ao diminuir, ele
+    # joga fora as linhas do topo SEM levar o cursor junto (o cursor fica "abaixo" do texto,
+    # às vezes fora da tela) e sem guardá-las no histórico; ao aumentar, não traz o histórico
+    # de volta. Aqui o cursor acompanha o conteúdo, como no xterm/VTE.
+    def _linha_vazia(self, row):
+        return not row or all(c.data in (" ", "") and c.bg == "default" and not c.reverse
+                              for c in row.values())
+
+    def _preencher_linha(self, y, runs, cols):
+        """Reconstrói a linha y do pyte a partir de runs do histórico."""
+        s = self.screen
+        row = s.buffer[y]
+        row.clear()
+        base = s.default_char
+        x = 0
+        for (fg, bg, bold, italic, under, strike), texto in runs:
+            fg = "default" if fg == DEFAULT_FG else (fg[1:] if fg.startswith("#") else fg)
+            bg = "default" if bg == DEFAULT_BG else (bg[1:] if bg.startswith("#") else bg)
+            for cel in _celulas(texto):
+                if x >= cols:
+                    return
+                row[x] = base._replace(data=cel, fg=fg, bg=bg, bold=bold, italics=italic,
+                                       underscore=under, strikethrough=strike)
+                x += 1
+
+    def _resize_screen(self, rows, cols):
+        s = self.screen
+        buf, cur = s.buffer, s.cursor
+        old_rows, old_cols = s.lines, s.columns
+        normal = self.alt_saved is None   # tela cheia (vim etc.) se redesenha sozinha
+
+        if rows < old_rows:
+            excess = old_rows - rows
+            # primeiro descarta linhas vazias abaixo do cursor; o resto sai pelo topo (vai ao histórico)
+            vazias, y = 0, old_rows - 1
+            while y > cur.y and vazias < excess and self._linha_vazia(buf.get(y)):
+                vazias += 1
+                y -= 1
+            top = min(cur.y, excess - vazias) if normal else 0
+            for y in range(top):
+                self.on_scroll_out(buf[y])
+            if top:
+                for y in range(top, old_rows):
+                    row = buf.pop(y, None)
+                    if row is None:
+                        buf.pop(y - top, None)
+                    else:
+                        buf[y - top] = row
+                cur.y -= top
+            for y in [k for k in buf if k >= rows]:
+                del buf[y]
+        elif rows > old_rows and normal and self.history:
+            pull = min(rows - old_rows, len(self.history))
+            puxadas = self.history[-pull:]
+            del self.history[-pull:]
+            for y in range(old_rows - 1, -1, -1):
+                row = buf.pop(y, None)
+                if row is not None:
+                    buf[y + pull] = row
+            for i, runs in enumerate(puxadas):
+                self._preencher_linha(i, runs, cols)
+            cur.y += pull
+
+        s.lines = rows
+        s.resize(rows, cols)      # as linhas já estão certas: o pyte só ajusta as colunas
+        s.set_margins()           # região de rolagem volta ao normal (como os terminais reais)
+        if cols > old_cols:
+            s.tabstops.update(range(8, cols, 8))
+        cur.y = max(0, min(cur.y, rows - 1))
+        if cols != old_cols:
+            cur.x = min(cur.x, cols - 1)
+        self.last_cursor_y = cur.y
+        s.dirty.update(range(rows))
 
     def zoom(self, delta):
         size = max(FONT_MIN, min(FONT_MAX, int(self.font.cget("size")) + delta))
@@ -644,6 +770,7 @@ class PtyPane(tk.Frame):
     def set_alt_screen(self, enable):
         """Simula o buffer alternativo (usado por apps de tela cheia)."""
         s = self.screen
+        self._sel_clear()   # o conteúdo da tela troca por completo
         if enable and self.alt_saved is None:
             rows = [[s.buffer[y][x] for x in range(s.columns)] for y in range(s.lines)]
             self.alt_saved = (rows, s.cursor.x, s.cursor.y)
@@ -671,12 +798,14 @@ class PtyPane(tk.Frame):
         self.history.append(self.line_runs(line, self.screen.columns))
         if len(self.history) > SCROLLBACK + 500:
             del self.history[:500]
+            self._sel_shift(-500)
         if self.offset:  # mantém a posição de leitura estável enquanto chega saída
             self.offset = min(self.offset + 1, len(self.history))
 
     def clear_history(self):
         self.history.clear()
         self.offset = 0
+        self._sel_clear()
         # Uma limpeza de scrollback não deve deixar linhas antigas em cache na viewport.
         self.line_cache.clear()
         if hasattr(self, "screen"):
@@ -687,6 +816,7 @@ class PtyPane(tk.Frame):
         if new == self.offset:
             return
         self.offset = new
+        self._sel_dirty = True
         if new == 0:
             self.screen.dirty.update(range(self.screen.lines))
         self.safe_render()
@@ -784,6 +914,7 @@ class PtyPane(tk.Frame):
         if self.line_cache.get(y) == runs:  # nada mudou: não mexe no widget
             return
         self.line_cache[y] = runs
+        self._sel_dirty = True
         self.text.delete(f"{y + 1}.0", f"{y + 1}.end")
         if runs:
             args = []
@@ -836,9 +967,6 @@ class PtyPane(tk.Frame):
         if self.destroyed:
             return
         s = self.screen
-        # Tk apaga o tag nativo "sel" quando uma linha selecionada é redesenhada.
-        # Guardamos os índices e aplicamos a seleção de volta após atualizar as linhas.
-        selection = tuple(self.text.tag_ranges("sel"))
         if len(self.tags) > MAX_TAGS:
             self.flush_tags()
 
@@ -863,13 +991,8 @@ class PtyPane(tk.Frame):
                 if 0 <= y < s.lines:
                     self.draw_runs(y, self.live_runs(y))
 
-        if selection:
-            try:
-                self.text.tag_remove("sel", "1.0", "end")
-                for i in range(0, len(selection), 2):
-                    self.text.tag_add("sel", selection[i], selection[i + 1])
-            except tk.TclError:
-                pass
+        if self._sel_dirty:   # o Text apaga tags de linhas redesenhadas: pinta a seleção de novo
+            self._apply_selection()
         if self.text.yview()[0] != 0.0:  # o Text nunca deve rolar sozinho
             self.text.yview_moveto(0)
 
@@ -903,6 +1026,9 @@ class PtyPane(tk.Frame):
             return "break"
         if ctrl and shift and ks in ("V", "v"):
             return self.paste()
+        if ctrl and shift and ks in ("A", "a"):
+            self.select_all()
+            return "break"
         if shift and ks == "Insert":
             return self.paste()
         if ctrl and ks == "Insert":
@@ -973,6 +1099,8 @@ class PtyPane(tk.Frame):
             self.send(arrow * 3)
         else:
             self.scroll_view(d * 3)
+            if self.sel_drag:   # rolou com o botão pressionado: o fim da seleção acompanha o ponteiro
+                self._extend_to_pointer()
         return "break"
 
     def on_right_click(self, _e):
@@ -981,19 +1109,278 @@ class PtyPane(tk.Frame):
             return "break"
         return self.paste()
 
-    # ── área de transferência ──
-    def has_selection(self):
-        return bool(self.text.tag_ranges("sel"))
+    # ── seleção (em linhas absolutas) ──
+    def _abs_base(self):
+        return len(self.history) - self.offset
 
-    def copy(self):
+    def _row_runs(self, i):
+        n = len(self.history)
+        if 0 <= i < n:
+            return self.history[i]
+        j = i - n
+        s = self.screen
+        if 0 <= j < s.lines:
+            return self.line_runs(s.buffer[j], s.columns)
+        return []
+
+    def _row_text(self, i):
+        return "".join(t for _, t in self._row_runs(i))
+
+    def _pos_from_event(self, x, y):
+        """(linha_absoluta, coluna) sob o ponteiro, limitado à área visível."""
         try:
-            sel = self.text.get("sel.first", "sel.last")
-        except tk.TclError:
+            row = int(self.text.index(f"@{x},{y}").split(".")[0]) - 1
+        except (tk.TclError, ValueError):
+            row = 0
+        row = max(0, min(self.rows - 1, row))
+        if y < 0:
+            row = 0
+        elif y >= self.text.winfo_height():
+            row = self.rows - 1
+        col = max(0, min(self.cols - 1, int((x - PAD) // self.cw)))
+        return (self._abs_base() + row, col)
+
+    def _snap(self, pos, mode):
+        """Faixa (início, fim) da palavra ou da linha na posição."""
+        row, col = pos
+        if mode == "line":
+            return (row, 0), (row, 10 ** 6)
+        cel = _celulas(self._row_text(row))
+        if not cel:
+            return pos, pos
+        col = min(col, len(cel) - 1)
+
+        def palavra(c):
+            return c == "" or (not c.isspace() and c[0] not in WORD_STOP)
+
+        if not palavra(cel[col]):
+            return (row, col), (row, col)
+        i = j = col
+        while i > 0 and palavra(cel[i - 1]):
+            i -= 1
+        while j < len(cel) - 1 and palavra(cel[j + 1]):
+            j += 1
+        return (row, i), (row, j)
+
+    def _sel_range(self):
+        if self.sel_a is None or self.sel_b is None:
+            return None
+        a, b = self.sel_a, self.sel_b
+        return (a, b) if a <= b else (b, a)
+
+    def has_selection(self):
+        return self._sel_range() is not None
+
+    def _sel_clear(self):
+        if self.sel_a is None and self.sel_b is None and not self._sel_painted:
             return
-        sel = "\n".join(line.rstrip() for line in sel.split("\n"))
+        self.sel_a = self.sel_b = self._anchor = self._origin = None
+        self.sel_drag = False
+        self._sel_refresh()
+        self._release_primary()
+
+    def _release_primary(self):
+        if self._primary_owned:
+            self._primary_owned = False
+            try:
+                self.text.selection_clear(selection="PRIMARY")
+            except tk.TclError:
+                pass
+
+    def _sel_shift(self, d):
+        """O histórico perdeu (ou ganhou) linhas no começo: ajusta as linhas absolutas."""
+        def mv(p):
+            return None if p is None else (max(0, p[0] + d), p[1])
+        self.sel_a, self.sel_b, self._anchor = mv(self.sel_a), mv(self.sel_b), mv(self._anchor)
+        if self._origin:
+            self._origin = (mv(self._origin[0]), mv(self._origin[1]))
+
+    def _sel_refresh(self):
+        self._sel_dirty = True
+        self._apply_selection()
+
+    def _apply_selection(self):
+        self._sel_dirty = False
+        r = self._sel_range()
+        if r is None and not self._sel_painted:
+            return
+        t = self.text
+        try:
+            t.tag_remove("jsel", "1.0", "end")
+            self._sel_painted = False
+            if r is None:
+                return
+            (r0, c0), (r1, c1) = r
+            base = self._abs_base()
+            for y in range(self.rows):
+                i = base + y
+                if i < r0:
+                    continue
+                if i > r1:
+                    break
+                runs = self.line_cache.get(y)
+                cel = _celulas("".join(tx for _, tx in runs)) if runs else []
+                a = c0 if i == r0 else 0
+                ini = f"{y + 1}.{sum(len(c) for c in cel[:a])}"
+                if i == r1:
+                    fim = f"{y + 1}.{sum(len(c) for c in cel[:c1 + 1])}"
+                else:
+                    fim = f"{y + 1}.end"
+                t.tag_add("jsel", ini, fim)
+            t.tag_raise("jsel")   # acima das cores de fundo do programa
+            self._sel_painted = True
+        except tk.TclError:
+            pass
+
+    def selection_text(self):
+        r = self._sel_range()
+        if r is None:
+            return ""
+        (r0, c0), (r1, c1) = r
+        r0 = max(0, r0)
+        r1 = min(r1, len(self.history) + self.screen.lines - 1)
+        out = []
+        for i in range(r0, r1 + 1):
+            cel = _celulas(self._row_text(i))
+            a = c0 if i == r0 else 0
+            b = c1 + 1 if i == r1 else len(cel)
+            out.append("".join(cel[a:b]).rstrip())
+        return "\n".join(out).rstrip("\n")
+
+    def select_all(self):
+        n = len(self.history) + self.screen.lines
+        self.sel_a, self.sel_b = (0, 0), (n - 1, 10 ** 6)
+        self._sel_refresh()
+        self._publish_primary()
+
+    # mouse: botão 1
+    def on_press(self, e):
+        self.text.focus_set()
+        self._ptr = (e.x, e.y)
+        pos = self._pos_from_event(e.x, e.y)
+        self.sel_drag = True
+        self.sel_mode = "char"
+        r = self._sel_range()
+        if (e.state & 0x1) and r is not None:   # Shift+clique: estende a seleção existente
+            self._anchor = r[1] if pos <= r[0] else r[0]
+            self.sel_a, self.sel_b = self._anchor, pos
+        else:
+            self._anchor = pos
+            self.sel_a = self.sel_b = None
+        self._sel_refresh()
+        return "break"
+
+    def on_double(self, e):
+        return self._press_snap(e, "word")
+
+    def on_triple(self, e):
+        return self._press_snap(e, "line")
+
+    def _press_snap(self, e, mode):
+        self.text.focus_set()
+        self._ptr = (e.x, e.y)
+        pos = self._pos_from_event(e.x, e.y)
+        self.sel_drag = True
+        self.sel_mode = mode
+        self._origin = self._snap(pos, mode)
+        self.sel_a, self.sel_b = self._origin
+        self._anchor = pos
+        self._sel_refresh()
+        return "break"
+
+    def on_drag(self, e):
+        if self.sel_drag:
+            self._ptr = (e.x, e.y)
+            self._extend_to_pointer()
+            self._maybe_autoscroll()
+        return "break"
+
+    def _extend_to_pointer(self):
+        pos = self._pos_from_event(*self._ptr)
+        if self.sel_mode == "char":
+            if self._anchor is None:
+                return
+            self.sel_a, self.sel_b = self._anchor, pos
+            if self.sel_a == self.sel_b:   # clique sem arrastar: nada selecionado
+                self.sel_a = self.sel_b = None
+        elif self._origin:
+            ini, fim = self._snap(pos, self.sel_mode)
+            a0, b0 = self._origin
+            if pos < a0:
+                self.sel_a, self.sel_b = ini, b0
+            else:
+                self.sel_a, self.sel_b = a0, fim
+        self._sel_refresh()
+
+    def _scroll_speed(self):
+        y, h = self._ptr[1], self.text.winfo_height()
+        step = max(1, self.lh)
+        if y < 0:
+            return min(6, 1 + int(-y) // step)       # acima da janela: rola para o histórico
+        if y > h:
+            return -min(6, 1 + int(y - h) // step)   # abaixo: rola para o fim
+        return 0
+
+    def _maybe_autoscroll(self):
+        if self._scan_job is None and self.alt_saved is None and self._scroll_speed():
+            self._scan_job = self.after(AUTOSCROLL_MS, self._autoscroll_tick)
+
+    def _autoscroll_tick(self):
+        self._scan_job = None
+        if self.destroyed or not self.sel_drag or self.alt_saved is not None:
+            return
+        d = self._scroll_speed()
+        if d:
+            self.scroll_view(d)
+            self._extend_to_pointer()
+            self._scan_job = self.after(AUTOSCROLL_MS, self._autoscroll_tick)
+
+    def on_release(self, _e):
+        if self.sel_drag:
+            self.sel_drag = False
+            if self._scan_job is not None:
+                self.after_cancel(self._scan_job)
+                self._scan_job = None
+            self._publish_primary()
+        return "break"
+
+    # seleção PRIMARY do X11 (colar com o botão do meio, inclusive em outros programas)
+    def _publish_primary(self):
+        if not self.has_selection():
+            return
+        try:
+            if not self._primary_handler:
+                self.text.selection_handle(self._primary_chunk, selection="PRIMARY")
+                self._primary_handler = True
+            self.text.selection_own(selection="PRIMARY", command=self._primary_lost)
+            self._primary_owned = True
+        except tk.TclError:
+            pass
+
+    def _primary_chunk(self, offset, length):
+        off, n = int(offset), int(length)
+        if off == 0 or self._primary_cache[0] is None:
+            self._primary_cache = (True, self.selection_text().encode("utf-8"))
+        data = self._primary_cache[1]
+        end = min(len(data), off + n)
+        while off < end < len(data) and (data[end] & 0xC0) == 0x80:   # não corta um caractere ao meio
+            end -= 1
+        return data[off:end].decode("utf-8", "ignore")
+
+    def _primary_lost(self):
+        self._primary_owned = False
+        self._primary_cache = (None, b"")
+        if not self.sel_drag:
+            self._sel_clear()
+
+    # ── área de transferência ──
+    def copy(self):
+        texto = self.selection_text()
+        if not texto:
+            return
         self.clipboard_clear()
-        self.clipboard_append(sel)
-        self.text.tag_remove("sel", "1.0", "end")
+        self.clipboard_append(texto)
+        self._sel_clear()
 
     def paste(self, _event=None, primary=False):
         data = None
@@ -1002,7 +1389,7 @@ class PtyPane(tk.Frame):
                 data = self.text.selection_get(selection="PRIMARY")
             except tk.TclError:
                 data = None
-        if data is None:
+        if not data:
             try:
                 data = self.clipboard_get()
             except tk.TclError:

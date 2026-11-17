@@ -187,3 +187,31 @@ class TestVizinho(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRobustez(unittest.TestCase):
+    def test_orientacao_invalida_cai_em_horizontal(self):
+        import jtile
+        a = jtile.Arvore()
+        a.inserir(1)
+        a.inserir(2, 1, "diagonal")
+        self.assertEqual(a.raiz.orient, "h")
+        self.assertEqual(set(a.layout(0, 0, 100, 50, 4)), {1, 2})
+
+    def test_area_minuscula_nao_levanta(self):
+        import jtile
+        a = jtile.Arvore()
+        for i in range(1, 8):
+            a.inserir(i)
+        self.assertEqual(len(a.layout(0, 0, 1, 1, 8)), 7)
+
+    def test_remover_tudo_e_reinserir(self):
+        import jtile
+        a = jtile.Arvore()
+        for i in (1, 2, 3):
+            a.inserir(i)
+        for i in (2, 1, 3, 9):
+            a.remover(i)
+        self.assertEqual(len(a), 0)
+        a.inserir(5)
+        self.assertEqual(a.layout(0, 0, 10, 10, 2), {5: (0, 0, 10, 10)})
