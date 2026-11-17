@@ -30,6 +30,8 @@ import threading
 from typing import Callable
 
 LIMITE_LINHA = 65536
+LIMITE_FILA = 256        # pedidos pendentes para o JDesk; passou disso, recusa (não cresce sem fim)
+TEMPO_ENTREGA = 1.0      # um Receptor travado não pode congelar quem entrega (a thread do Tk)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -219,6 +221,8 @@ class Servidor:
                             self.clientes[registro] = conn
                         self.responder(conn, True)
                         conn.settimeout(None)  # receptor fica pendurado esperando mensagens
+                    elif self.fila.qsize() >= LIMITE_FILA:
+                        self.responder(conn, False, "fila cheia")
                     else:
                         self.fila.put((msg, conn))
         except OSError:
@@ -248,6 +252,7 @@ class Servidor:
         if not conn:
             return False
         try:
+            conn.settimeout(TEMPO_ENTREGA)
             conn.sendall((json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8"))
             return True
         except OSError:

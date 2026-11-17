@@ -3,11 +3,17 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e versionamento
 semântico (`MAJOR.MINOR.PATCH`).
 
-<<<<<<< HEAD
-=======
 ## [Não lançado]
 
+### Corrigido
+- jbash: se o bash não responde ao iniciar (ex.: erro no init ou no `~/.bashrc`), o JShell desiste em 10 s e mostra o erro, em vez de travar em "JShell". O `init.bash` é gravado de forma atômica.
+- jipc: entrega a um receptor travado tem limite de 1 s e a fila de pedidos do JDesk tem teto (256).
+- jtile: orientação inválida vira horizontal.
+- jterm_diag: mensagens claras sem DISPLAY/tkinter, em vez de traceback.
+- start-jwm: escolhe o primeiro display livre (:0 a :9).
+
 ### Adicionado
+- **JToast** (`JToast.py`): serviço de notificações (`org.freedesktop.Notifications`). Balões no canto superior direito do monitor principal, clique fecha, urgência por cor, limite contra enxurrada e texto sempre saneado. Precisa de `jeepney`; `--demo` testa só o visual.
 - **Fonte única** (`jtheme.py`): `JFONT=nome` ou `~/.config/jdev/font` escolhem a fonte de JTerm, JBar e JRun.
   Sem pedido, vale a primeira instalada entre JetBrains Mono, Iosevka, Commit Mono e DejaVu Sans Mono.
 - **Tema Void**: preto de verdade (`python3 jtheme.py set void`).
@@ -20,7 +26,6 @@ semântico (`MAJOR.MINOR.PATCH`).
 - JCode: Tab no fim de uma linha que já tem código é ignorado (em linha vazia continua indentando).
 - JTerm: respiro interno de 12 px (`JTERM_PAD=8` volta ao antigo) e cabeçalho dos painéis em fonte monoespaçada.
 
->>>>>>> JCode: limpa espaços ao salvar, Tab no fim da linha, quebra visual e mapa do arquivo
 ## [1.0.0] - 2026-11-07
 
 Primeira versão oficial: estável, bonita e leve.

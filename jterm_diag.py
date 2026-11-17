@@ -7,11 +7,15 @@ jterm_diag - diagnóstico de renderização do JTerm (emojis, altura de linha, z
 Mostra a versão do Tk, a fonte escolhida e, para vários caracteres, o quanto o Tk os mede
 e quão alta fica uma linha que os contém. Cole a saída inteira quando pedir ajuda.
 """
+import os
 import subprocess
-import tkinter as tk
-from tkinter import font
+import sys
 
-from JTerm import pick_family
+try:
+    import tkinter as tk
+    from tkinter import font
+except ImportError:
+    sys.exit("jterm_diag: falta o tkinter (Void: sudo xbps-install python3-tkinter)")
 
 AMOSTRAS = [
     ("ASCII", "0"),
@@ -34,7 +38,16 @@ def sh(cmd):
 
 
 def main():
-    root = tk.Tk()
+    if not os.environ.get("DISPLAY"):
+        sys.exit("jterm_diag: sem DISPLAY. Rode dentro do JWM/X (ou do JTerm).")
+    try:
+        from JTerm import pick_family
+    except Exception as exc:  # noqa: BLE001
+        sys.exit(f"jterm_diag: não consegui importar o JTerm ({exc})")
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        sys.exit(f"jterm_diag: não consegui abrir o display ({exc})")
     root.withdraw()
     print(f"Tk {tk.TkVersion}  patchlevel {root.tk.call('info', 'patchlevel')}  "
           f"windowing {root.tk.call('tk', 'windowingsystem')}")
