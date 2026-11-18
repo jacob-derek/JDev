@@ -9,8 +9,10 @@ semântico (`MAJOR.MINOR.PATCH`).
 - jbash: se o bash não responde ao iniciar (ex.: erro no init ou no `~/.bashrc`), o JShell desiste em 10 s e mostra o erro, em vez de travar em "JShell". O `init.bash` é gravado de forma atômica.
 - jipc: entrega a um receptor travado tem limite de 1 s e a fila de pedidos do JDesk tem teto (256).
 - jtile: orientação inválida vira horizontal.
+- JShell/jbash: a completion do bash (`_filedir`, `complete -d/-f`) agora devolve o pedido de "filenames", então pastas completam com `/` no fim em vez de espaço.
 - jterm_diag: mensagens claras sem DISPLAY/tkinter, em vez de traceback.
 - start-jwm: escolhe o primeiro display livre (:0 a :9).
+- JWM: `jwm.log` não cresce mais sem fim (rotação de 1 MB). A saída dos apps abertos pelo JWM vai para `jwm-apps.log` e a do JDesk para `jdesk.log` (ambos cortados em 1 MB); "atalho já em uso" aparece uma vez só em vez de centenas de avisos.
 
 ### Adicionado
 - **JToast** (`JToast.py`): serviço de notificações (`org.freedesktop.Notifications`). Balões no canto superior direito do monitor principal, clique fecha, urgência por cor, limite contra enxurrada e texto sempre saneado. Precisa de `jeepney`; `--demo` testa só o visual.

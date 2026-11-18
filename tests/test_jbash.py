@@ -47,6 +47,33 @@ class TestMotor(unittest.TestCase):
         self.assertTrue(self.m.ultimo_erro)
         self.assertFalse(self.m.disponivel())
 
+    def test_completion_pede_filenames_via_compopt(self):
+        """_filedir & cia chamam `compopt -o filenames`: sem isso as pastas ficavam sem a barra."""
+        self.assertTrue(self.m.iniciar(), self.m.ultimo_erro)
+        d = os.path.join(self.tmp.name, "pa")
+        os.makedirs(os.path.join(d, "subdir"))
+        self.m.executar(f"cd {d}")
+        self.m.executar('_t() { compopt -o filenames; COMPREPLY=($(compgen -d -- "$2")); }; complete -F _t tcmd')
+        opts, cands = self.m.completar("tcmd su", ["tcmd", "su"], 1)
+        self.assertIn("filenames", opts)
+        self.assertEqual(cands, ["subdir"])
+
+    def test_completion_dash_d_vira_filenames(self):
+        self.assertTrue(self.m.iniciar(), self.m.ultimo_erro)
+        d = os.path.join(self.tmp.name, "pb")
+        os.makedirs(os.path.join(d, "subdir"))
+        self.m.executar(f"cd {d}; complete -d tdir")
+        opts, cands = self.m.completar("tdir su", ["tdir", "su"], 1)
+        self.assertIn("filenames", opts)
+        self.assertEqual(cands, ["subdir"])
+
+    def test_compopt_do_bash_volta_ao_normal_depois(self):
+        self.assertTrue(self.m.iniciar(), self.m.ultimo_erro)
+        self.m.executar("complete -d tdir")
+        self.m.completar("tdir ", ["tdir", ""], 1)
+        self.m.executar('[ "$(type -t compopt)" = builtin ]')
+        self.assertEqual(self.m.status, 0)
+
     def test_init_gravado_por_inteiro(self):
         arq = jbash.Motor._gravar_init()
         self.assertEqual(arq.read_text(encoding="utf-8"), jbash.INIT)

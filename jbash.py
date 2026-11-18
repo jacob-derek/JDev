@@ -144,6 +144,19 @@ __jsh_complete() {
   local cmd=${COMP_WORDS[0]} cur=${COMP_WORDS[cword]-} prev= spec tries=0 rc
   (( cword > 0 )) && prev=${COMP_WORDS[cword-1]}
   local __jc_F __jc_W __jc_A __jc_o
+  # As funções do bash-completion (_filedir, _cd...) chamam `compopt -o filenames` para pedir a "/"
+  # no fim das pastas. Fora de uma completion de verdade o compopt falha e o pedido se perdia: este
+  # substituto (só durante esta chamada) anota as opções para o JShell aplicar.
+  compopt() {
+    while (( $# )); do
+      case $1 in
+        -o) __jc_o="$__jc_o $2"; shift ;;
+        +o) __jc_o=" ${__jc_o// $2/}"; shift ;;
+      esac
+      shift
+    done
+    return 0
+  }
   while (( tries++ < 3 )); do
     spec=$(complete -p -- "$cmd" 2>/dev/null)
     if [[ -z $spec ]]; then
@@ -158,11 +171,14 @@ __jsh_complete() {
       "$__jc_F" "$cmd" "$cur" "$prev" >/dev/null 2>&1; rc=$?
       (( rc == 124 )) && continue
     fi
+    # -f / -d (ou -A file/directory) também são nomes de arquivo: pasta ganha "/" no fim
+    [[ " $__jc_A " == *" file "* || " $__jc_A " == *" directory "* ]] && __jc_o="$__jc_o filenames"
     [[ -n $__jc_W ]] && COMPREPLY+=( $(compgen -W "$__jc_W" -- "$cur") )
     local a
     for a in $__jc_A; do COMPREPLY+=( $(compgen -A "$a" -- "$cur") ); done
     break
   done
+  unset -f compopt
   {
     printf '\036C\037%s\037' "$__jc_o"
     (( ${#COMPREPLY[@]} )) && printf '%s\0' "${COMPREPLY[@]}"

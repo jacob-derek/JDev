@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import logging.handlers
 import os
 import re
 import select
@@ -34,6 +35,7 @@ except ImportError as exc:
 APP_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(APP_DIR))
 from jtile import Arvore, vizinho  # noqa: E402  (mosaico em árvore)
+import jlog  # noqa: E402  (logs com tamanho limitado)
 try:  # paleta compartilhada (opcional): sem o jtheme.py ao lado vale o Tokyo Night embutido
     import jtheme as _T  # noqa: E402
 except ImportError:
@@ -45,7 +47,8 @@ LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
-    handlers=[logging.FileHandler(LOG_PATH), logging.StreamHandler()],
+    handlers=[logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=2, encoding="utf-8"),
+              logging.StreamHandler()],
 )
 log = logging.getLogger("JWM")
 
@@ -104,7 +107,8 @@ class Workspace:
 class JWM:
     """Small reparenting-free ICCCM/EWMH window manager for X11."""
 
-    def __init__(self, jdesk: bool = True, solo_bar: bool = False):
+    def __init__(self, jdesk: bool = True):
+        self._xerros = jlog.SemRepetir()
         self.dpy = display.Display()
         self.dpy.set_error_handler(self._xerror)
         self.screen = self.dpy.screen()
@@ -127,9 +131,6 @@ class JWM:
         self.running = True
         self.drag: Optional[dict] = None
         self.desktop_proc: Optional[subprocess.Popen] = None
-        self.solo_bar = solo_bar                       # modo clean: sem JDesk, só a JBar como janela própria
-        self.bar_proc: Optional[subprocess.Popen] = None
-        self.bar_solo = False                          # a JBar solo está rodando (a faixa do rodapé é reservada)
         self.key_names: dict[int, str] = {}
         self.mode: Optional[str] = None   # None | "resize"
         self.bar_visible = True           # faixa da JBar reservada no rodapé?
@@ -160,8 +161,6 @@ class JWM:
         self._scan_existing_windows()
         if self.start_jdesk:
             self._start_desktop()
-        elif self.solo_bar:
-            self._start_solo_bar()
         log.info("JWM iniciado em %dx%d; log: %s", self.width, self.height, LOG_PATH)
 
     def _xerror(self, exc, request) -> None:
@@ -169,7 +168,12 @@ class JWM:
         # BadWindow/BadDrawable nessa corrida é normal; não deve encerrar o WM.
         if isinstance(exc, (error.BadWindow, error.BadDrawable)):
             return
-        log.warning("Erro de protocolo X11 (%s), request=%s", exc, getattr(request, "_request", request))
+        if isinstance(exc, error.BadAccess) and getattr(exc, "major_opcode", None) == 33:   # GrabKey
+            texto = "Atalho já em uso por outro programa (GrabKey negado)"
+        else:
+            texto = f"Erro de protocolo X11 ({exc}), request={getattr(request, '_request', request)}"
+        if self._xerros.nova(texto):    # o mesmo erro repetido 300 vezes só aparece uma
+            log.warning("%s", texto)
 
     def _color(self, color: str) -> int:
         try:
@@ -216,39 +220,19 @@ class JWM:
             log.warning("JDesk.py não encontrado em %s; JWM será iniciado sem desktop J.", APP_DIR)
             return
         try:
-            self.desktop_proc = subprocess.Popen(
-                [sys.executable, str(script)], cwd=str(APP_DIR),
-                stdin=subprocess.DEVNULL, stdout=open(LOG_PATH, "a"), stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+            saida = jlog.abrir_saida("jdesk.log")
+            try:
+                self.desktop_proc = subprocess.Popen(
+                    [sys.executable, str(script)], cwd=str(APP_DIR),
+                    stdin=subprocess.DEVNULL, stdout=saida or subprocess.DEVNULL, stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            finally:
+                if saida:
+                    saida.close()
             log.info("JDesk iniciado (PID %s)", self.desktop_proc.pid)
         except OSError:
             log.exception("Não foi possível iniciar o JDesk")
-
-    def _start_solo_bar(self) -> None:
-        """Modo clean (--no-ui): só a JBar, como janela própria na faixa do rodapé do monitor primário."""
-        script = APP_DIR / "JBar.py"
-        if not script.is_file():
-            log.warning("JBar.py não encontrado em %s; seguindo sem barra.", APP_DIR)
-            return
-        try:
-            self.bar_proc = subprocess.Popen(
-                [sys.executable, str(script), "--solo", "--wm-pid", str(os.getpid())], cwd=str(APP_DIR),
-                stdin=subprocess.DEVNULL, stdout=open(LOG_PATH, "a"), stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            self.bar_solo = True
-            log.info("JBar (modo clean) iniciada (PID %s)", self.bar_proc.pid)
-        except OSError:
-            log.exception("Não foi possível iniciar a JBar")
-
-    def _check_solo_bar(self) -> None:
-        """Se a JBar solo morreu, devolve a faixa do rodapé às janelas (em vez de deixar um buraco)."""
-        if self.bar_proc is not None and self.bar_proc.poll() is not None:
-            log.warning("JBar encerrou (código %s); liberando a faixa do rodapé.", self.bar_proc.returncode)
-            self.bar_proc = None
-            self.bar_solo = False
-            self.arrange()
 
     def _refresh_size(self) -> None:
         try:
@@ -361,9 +345,8 @@ class JWM:
         return self.monitors[index]
 
     def _bar_bottom(self, monitor_index: int) -> int:
-        """Altura reservada no RODAPÉ pela JBar (a do JDesk ou a solo do modo clean); só existe no monitor
-        primário e some com Super+Shift+B."""
-        if self.bar_visible and (self.desktop_id is not None or self.bar_solo) and monitor_index == self.desk_monitor:
+        """Altura reservada no RODAPÉ pela barra do JDesk; só existe no monitor primário e some com Super+Shift+B."""
+        if self.bar_visible and self.desktop_id is not None and monitor_index == self.desk_monitor:
             return JDESK_BAR
         return 0
 
@@ -372,13 +355,7 @@ class JWM:
         c = self.clients.get(self.active) if self.active is not None else None
         ws = self.workspaces[self.current_ws]
         dados = {"pid": os.getpid(), "bar": self.bar_visible, "mode": self.mode, "split": ws.next_orient,
-                 "title": (c.title if c else "") or "", "ws": self.current_ws + 1,
-                 # para a JBar solo: quantos workspaces, quais têm janelas (0-based) e onde fica a faixa dela
-                 "n_ws": len(self.workspaces),
-                 "ws_used": [i for i, w in enumerate(self.workspaces) if w.clients]}
-        if self.bar_solo:
-            mx, my, mw, mh = self._monitor_rect(self.desk_monitor)
-            dados["bar_rect"] = [mx, my + mh - JDESK_BAR, mw, JDESK_BAR]
+                 "title": (c.title if c else "") or "", "ws": self.current_ws + 1}
         texto = json.dumps(dados, ensure_ascii=False)
         if texto == self._state_json:
             return
@@ -686,7 +663,7 @@ class JWM:
             w = min(bx2 - bx1, max(MIN_W, w))
             h = min(by2 - by1, max(MIN_H, h))
             x = max(bx1, min(x, bx2 - w))
-            toca_jdesk = (self.desktop_id is not None or self.bar_solo) and x < m0x + m0w and x + w > m0x
+            toca_jdesk = self.desktop_id is not None and x < m0x + m0w and x + w > m0x
             y = max(by1, min(y, by2 - h))
             bot0 = self._bar_bottom(self.desk_monitor)
             if toca_jdesk and bot0:                    # não deixa a flutuante cobrir a faixa da barra
@@ -971,11 +948,16 @@ class JWM:
             self.focus(c.wid)
 
     def launch(self, argv: list[str]) -> None:
+        saida = jlog.abrir_saida("jwm-apps.log")   # a saída dos apps (Firefox...) não entope o jwm.log
         try:
             subprocess.Popen(argv, cwd=str(Path.home()), start_new_session=True,
-                             stdin=subprocess.DEVNULL, stdout=open(LOG_PATH, "a"), stderr=subprocess.STDOUT)
+                             stdin=subprocess.DEVNULL, stdout=saida or subprocess.DEVNULL,
+                             stderr=subprocess.STDOUT)
         except OSError as exc:
             log.error("Falha ao executar %r: %s", argv, exc)
+        finally:
+            if saida:
+                saida.close()
 
     def launch_terminal(self) -> None:
         jterm = APP_DIR / "JTerm.py"
@@ -1231,8 +1213,6 @@ class JWM:
             if wid in self.clients:
                 self.focus(wid)
                 self.close_active()
-        elif typ == self.a["_NET_CURRENT_DESKTOP"] and data:
-            self.switch_workspace(int(data[0]))
         elif typ == self.a["_NET_WM_STATE"] and wid in self.clients:
             c = self.clients[wid]
             # action 0=remove, 1=add, 2=toggle; handle fullscreen atom in either slot
@@ -1342,7 +1322,6 @@ class JWM:
                 if now >= next_poll:
                     try:
                         self._poll_outputs()
-                        self._check_solo_bar()
                     except Exception:
                         log.exception("Erro ao checar monitores (ignorado)")
                     next_poll = time.monotonic() + (0.3 if self._layout_proc else HOTPLUG_POLL)
@@ -1379,12 +1358,6 @@ class JWM:
                     self.desktop_proc.wait(timeout=1.5)
                 except subprocess.TimeoutExpired:
                     self.desktop_proc.kill()
-            if self.bar_proc and self.bar_proc.poll() is None:
-                self.bar_proc.terminate()
-                try:
-                    self.bar_proc.wait(timeout=1.5)
-                except subprocess.TimeoutExpired:
-                    self.bar_proc.kill()
             try:
                 self.root.change_property(self.a["_NET_ACTIVE_WINDOW"], Xatom_window(), 32, [X.NONE])
                 self.root.delete_property(self.a["_NET_SUPPORTING_WM_CHECK"])
@@ -1414,14 +1387,12 @@ def Xatom_cardinal():
 def main() -> int:
     parser = argparse.ArgumentParser(description="JWM: window manager X11 do ecossistema J")
 
-    parser.add_argument("--no-jdesk", "--no-ui", dest="clean", action="store_true",
-                        help="modo clean: sem JDesk, só o WM e a JBar no rodapé (Super+Shift+B mostra/esconde)")
-    parser.add_argument("--bare", action="store_true",
-                        help="só o WM, sem JDesk e sem JBar (sistema liso)")
+    parser.add_argument("--no-jdesk", "--no-ui", dest="no_jdesk", action="store_true",
+                        help="não iniciar o JDesk (sem JBar): só o WM, sistema liso")
 
     args = parser.parse_args()
     try:
-        JWM(jdesk=not (args.clean or args.bare), solo_bar=args.clean and not args.bare).run()
+        JWM(jdesk=not args.no_jdesk).run()
     except SystemExit as exc:
         return int(exc.code or 0)
     except Exception:
