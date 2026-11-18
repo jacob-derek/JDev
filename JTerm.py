@@ -43,6 +43,12 @@ from tkinter import font, messagebox
 
 import pyte
 
+try:
+    from jcursor import decscusr
+except ImportError:   # sem o jcursor.py o terminal segue com o cursor de bloco fixo
+    def decscusr(_n):
+        return "block", False
+
 IS_WINDOWS = os.name == "nt"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -112,9 +118,11 @@ ALT_MASK = 0x20000 if IS_WINDOWS else 0x8
 MODE_APP_CURSOR = 1 << 5        # DECCKM  (?1)
 MODE_BRACKETED_PASTE = 2004 << 5  # (?2004)
 
-ALT_SCREEN_RE = re.compile(r"\x1b\[\?(?:1049|1047|47)([hl])")
+ALT_SCREEN_RE = re.compile(r"\x1b\[\?(?:1049|1047|47)([hl])|\x1b\[([0-6]?) q")
 # sequência cortada no fim de um bloco de dados (ex.: "\x1b[?10" + "49h" no próximo)
-PARTIAL_RE = re.compile(r"\x1b(?:\[(?:\?\d{0,4})?)?$")
+PARTIAL_RE = re.compile(r"\x1b(?:\[(?:\?\d{0,4}|\d? ?)?)?$")
+# DECSCUSR (ESC [ Ps SP q): formato e piscar do cursor. O pyte não entende; tratamos aqui (jcursor).
+BLINK_MS = 530
 
 
 # ── Backends de PTY ──────────────────────────────────────────────────────────
@@ -431,6 +439,10 @@ class PtyPane(tk.Frame):
         self.alt_saved = None
         self.pending = ""         # sequência de escape cortada entre dois blocos
         self.last_cursor_y = 0
+        self.cur_forma, self.cur_pisca, self.cur_on = "block", False, True
+        self._cur_pos = None
+        self._blink_job = getattr(self, "_blink_job", None)    # não perde o timer ao reiniciar o emulador
+        self._cur_widget = getattr(self, "_cur_widget", None)
         self.sel_a = self.sel_b = self._anchor = self._origin = None
         self.sel_drag = False
         self.reset_text_lines()
@@ -501,6 +513,12 @@ class PtyPane(tk.Frame):
         if self.destroyed:
             return
         self.destroyed = True
+        if self._blink_job is not None:
+            try:
+                self.after_cancel(self._blink_job)
+            except (tk.TclError, ValueError):
+                pass
+            self._blink_job = None
         self.kill_process()
         try:
             self.destroy()
@@ -763,7 +781,12 @@ class PtyPane(tk.Frame):
         pos = 0
         for m in ALT_SCREEN_RE.finditer(data):
             self.stream.feed(data[pos:m.start()])
-            self.set_alt_screen(m.group(1) == "h")
+            if m.group(1):
+                self.set_alt_screen(m.group(1) == "h")
+            else:
+                self.cur_forma, self.cur_pisca = decscusr(int(m.group(2) or 0))
+                self.cur_on = True
+                self.screen.dirty.add(self.screen.cursor.y)
             pos = m.end()
         self.stream.feed(data[pos:])
 
@@ -907,7 +930,8 @@ class PtyPane(tk.Frame):
     def live_runs(self, y):
         s = self.screen
         cur = s.cursor
-        cx = cur.x if (not cur.hidden and cur.y == y) else -1
+        bloco = self.cur_forma == "block" and self.cur_on     # barra/sublinhado são desenhados à parte
+        cx = cur.x if (not cur.hidden and cur.y == y and bloco) else -1
         return self.line_runs(s.buffer[y], s.columns, cx)
 
     def draw_runs(self, y, runs):
@@ -995,6 +1019,67 @@ class PtyPane(tk.Frame):
             self._apply_selection()
         if self.text.yview()[0] != 0.0:  # o Text nunca deve rolar sozinho
             self.text.yview_moveto(0)
+        self._atualizar_cursor()
+
+    # ── cursor: barra/sublinhado e piscar (DECSCUSR) ──
+    def _esconder_cursor(self):
+        w = self._cur_widget
+        if w is not None:
+            try:
+                w.place_forget()
+            except tk.TclError:
+                pass
+
+    def _atualizar_cursor(self):
+        """Barra e sublinhado são uma faixa fina por cima do Text; o bloco é a célula invertida.
+        Qualquer falha aqui só apaga o cursor decorativo: nunca derruba o terminal."""
+        try:
+            cur = self.screen.cursor
+            pos = (cur.x, cur.y)
+            if pos != self._cur_pos:      # andou: o cursor volta a aparecer (como em qualquer terminal)
+                self._cur_pos = pos
+                self.cur_on = True
+            ativo = not self.destroyed and self.visible and not self.offset and not cur.hidden
+            if not ativo:
+                self._esconder_cursor()
+                return
+            if self.cur_forma == "block":
+                self._esconder_cursor()
+            elif not self.cur_on:
+                self._esconder_cursor()
+            else:
+                caixa = self.text.bbox(f"{cur.y + 1}.0")
+                if not caixa:
+                    self._esconder_cursor()
+                else:
+                    if self._cur_widget is None:
+                        self._cur_widget = tk.Frame(self.text, bd=0, highlightthickness=0, bg=DEFAULT_FG)
+                    x, y, _w, h = caixa
+                    x = PAD + cur.x * self.cw
+                    if self.cur_forma == "bar":
+                        self._cur_widget.place(x=x, y=y, width=2, height=h)
+                    else:
+                        self._cur_widget.place(x=x, y=y + h - 2, width=self.cw, height=2)
+            if self.cur_pisca and self._blink_job is None:
+                self._blink_job = self.after(BLINK_MS, self._piscar)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _piscar(self):
+        self._blink_job = None
+        if self.destroyed or not self.cur_pisca:
+            self.cur_on = True
+            return
+        self.cur_on = not self.cur_on
+        try:
+            y = self.screen.cursor.y
+            self.line_cache.pop(y, None)
+            self.screen.dirty.add(y)
+            self.safe_render()             # redesenha a linha do cursor e atualiza a faixa
+        except (tk.TclError, AttributeError):
+            pass
+        if not self.destroyed and self.cur_pisca and self._blink_job is None:
+            self._blink_job = self.after(BLINK_MS, self._piscar)
 
     # ── teclado ──
     def on_key(self, e):

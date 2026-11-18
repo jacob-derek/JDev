@@ -15,6 +15,11 @@ semântico (`MAJOR.MINOR.PATCH`).
 - JWM: `jwm.log` não cresce mais sem fim (rotação de 1 MB). A saída dos apps abertos pelo JWM vai para `jwm-apps.log` e a do JDesk para `jdesk.log` (ambos cortados em 1 MB); "atalho já em uso" aparece uma vez só em vez de centenas de avisos.
 
 ### Adicionado
+- **JCode**: busca com `Ctrl+F` (incremental, ocorrências destacadas, Enter/↓ próxima, ↑ anterior, Esc fecha, contador `3/12` na barra; maiúsculas só importam se você digitar maiúscula). `Ctrl+G` (ir para linha) continua.
+- **JCode**: `Ctrl+↓`/`Ctrl+↑` rolam a tela sem mover o texto e a tela pode passar do fim do arquivo (dá para ler as últimas linhas no meio da tela, sem criar linhas vazias).
+- **JCode**: `jcode -map <arquivo>` mostra no terminal o mapa da estrutura (densidade em braille, intervalo de linhas e def/class/títulos de cada trecho).
+- **JCode**: `jcode -setup` abre um menu para escolher o formato do cursor (barra, bloco, sublinhado, padrão) e se ele pisca. Fica em `~/.config/jdev/jcode.json`.
+- **JTerm**: entende o formato e o piscar do cursor (DECSCUSR: barra, bloco, sublinhado), também para programas de fora, como o vim.
 - **JToast** (`JToast.py`): serviço de notificações (`org.freedesktop.Notifications`). Balões no canto superior direito do monitor principal, clique fecha, urgência por cor, limite contra enxurrada e texto sempre saneado. Precisa de `jeepney`; `--demo` testa só o visual.
 - **Fonte única** (`jtheme.py`): `JFONT=nome` ou `~/.config/jdev/font` escolhem a fonte de JTerm, JBar e JRun.
   Sem pedido, vale a primeira instalada entre JetBrains Mono, Iosevka, Commit Mono e DejaVu Sans Mono.
@@ -25,6 +30,7 @@ semântico (`MAJOR.MINOR.PATCH`).
 - **JCode**: mapa do arquivo à direita (`F2`), em braille, com a janela visível, o cursor, `def`/`class` e erro de sintaxe destacados; clicar pula para o trecho.
 
 ### Alterado
+- JCode: o minimapa lateral (F2) saiu do editor; o mapa agora é o comando `jcode -map`.
 - JCode: Tab no fim de uma linha que já tem código é ignorado (em linha vazia continua indentando).
 - JTerm: respiro interno de 12 px (`JTERM_PAD=8` volta ao antigo) e cabeçalho dos painéis em fonte monoespaçada.
 

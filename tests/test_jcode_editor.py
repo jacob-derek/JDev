@@ -83,10 +83,9 @@ class TestMapa(unittest.TestCase):
         self.assertEqual(JCode.montar_mapa([], 10), [])
         self.assertEqual(JCode.montar_mapa([1], 0), [])
 
-    def test_analise_inclui_perfil(self):
+    def test_analise_nao_calcula_perfil_no_editor(self):
         res = JCode.analisar_documento("def f():\n    return 1\n", ".py", set(), 0)
-        self.assertEqual(len(res.perfil), 3)
-        self.assertGreater(res.perfil[0], 0)
+        self.assertIsNone(res.perfil)    # o mapa agora é o comando `jcode -map`
 
     def test_analise_arquivo_gigante_sem_perfil(self):
         res = JCode.analisar_documento("x" * (JCode.LIMITE_ANALISE_CHARS + 1), ".txt", set())
