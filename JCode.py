@@ -56,6 +56,17 @@ from prompt_toolkit.lexers import Lexer, PygmentsLexer
 from prompt_toolkit.styles import Style
 
 try:
+    import jstatus
+except ImportError:   # sem o jstatus.py a barra fica mínima
+    jstatus = None
+
+try:
+    import jicons
+    NERD = jicons.MODO == "nerd"
+except ImportError:
+    NERD = False
+
+try:
     import jcursor
 except ImportError:   # sem o jcursor.py o cursor fica como o terminal quiser
     jcursor = None
@@ -1792,66 +1803,66 @@ def editar(arg_caminho: str) -> None:
         style="class:outline",
     )
 
+    ramo_cache = {"valor": None, "t": -999.0}
+
+    def ramo_atual() -> Optional[str]:
+        """Ramo do git lendo .git/HEAD; refeito a cada 5 s (nunca a cada tecla)."""
+        agora = time.monotonic()
+        if jstatus is not None and agora - ramo_cache["t"] > 5.0:
+            ramo_cache.update(valor=jstatus.ramo_git(caminho), t=agora)
+        return ramo_cache["valor"]
+
     def texto_status():
-        modificado = buffer.text != texto_salvo[0]
+        if jstatus is None:
+            return [("class:status", f" {caminho.name}")]
         doc = buffer.document
-        posicao = f"{doc.cursor_position_row + 1}:{doc.cursor_position_col + 1}"
-
-        if modo_comando["ativo"]:
-            if modo_comando["tipo"] == "busca":
-                n = len(busca["posicoes"])
-                contagem = f"  {busca['indice'] + 1}/{n}" if n else ""
-                modo = "[BUSCAR] " + modo_comando["texto"] + "_" + contagem
-            else:
-                modo = "[IR] " + modo_comando["texto"] + "_"
+        modo = modo_texto = None
+        if modo_comando["ativo"] and modo_comando["tipo"] == "busca":
+            n = len(busca["posicoes"])
+            modo = "busca"
+            modo_texto = modo_comando["texto"] + (f" {busca['indice'] + 1}/{n}" if n else (" sem resultados" if modo_comando["texto"] else ""))
+        elif modo_comando["ativo"]:
+            modo, modo_texto = "ir", modo_comando["texto"] + (f"  {modo_comando['erro']}" if modo_comando["erro"] else "")
         elif modo_explorar["ativo"]:
-            modo = "[EXP]"
+            modo = "exp"
         elif selecao_linha["ativa"]:
-            modo = "[SEL]"
-        else:
-            modo = ""
+            modo = "sel"
 
-        if modificado:
-            estado_curto = "● MOD"
-        elif salvamento["ok"]:
-            estado_curto = "✓ SALVO"
-        else:
-            estado_curto = "! ERRO"
-
-        base = f" {caminho.name}  │  {estado_curto}  │  {posicao}"
-        if modo:
-            base += f"  │  {modo}"
-        detalhes_formato = []
+        flags = []
         if not quebra["ativa"]:
-            detalhes_formato.append("sem quebra")
+            flags.append("sem quebra")
         if formato["fim_linha"] != "\n":
-            detalhes_formato.append({"\r\n": "CRLF", "\r": "CR"}.get(formato["fim_linha"], "?"))
+            flags.append({"\r\n": "CRLF", "\r": "CR"}.get(formato["fim_linha"], "?"))
         if formato["encoding"] != "utf-8":
-            detalhes_formato.append(formato["encoding"])
-        if detalhes_formato:
-            base += "  │  " + " ".join(detalhes_formato)
+            flags.append(formato["encoding"])
 
-        extras = []
-        if not salvamento["ok"] and salvamento["erro"]:
-            extras.append(salvamento["erro"])
-        if modo_comando["ativo"] and modo_comando["erro"]:
-            extras.append(modo_comando["erro"])
+        mensagens = []
         if mensagem["texto"] and time.monotonic() < mensagem["expira"]:
-            extras.append(mensagem["texto"])
+            mensagens.append(mensagem["texto"])
         if analise["desativada"]:
-            extras.append("análise desativada (arquivo grande)")
-        extra = "".join("  ·  " + e for e in extras)
-
-        erro = analise["erro"]
-        if extensao == ".py" and erro is not None:
-            linha_erro = erro[0] if erro[0] is not None else "?"
-            return [("class:status.error", f"{base}  │  Sintaxe L{linha_erro}: {erro[1]}{extra}")]
-        return [("class:status", base + extra)]
+            mensagens.append("análise desativada (arquivo grande)")
+        erro = analise["erro"] if extensao == ".py" else None
+        try:
+            largura = app.output.get_size().columns
+        except Exception:
+            largura = 80
+        estado = {
+            "nome": caminho.name, "modificado": buffer.text != texto_salvo[0], "salvo_ok": salvamento["ok"],
+            "erro_salvar": None if salvamento["ok"] else (salvamento["erro"] or "erro ao salvar"),
+            "modo": modo, "modo_texto": modo_texto or "", "linha": doc.cursor_position_row,
+            "coluna": doc.cursor_position_col, "total": len(doc.lines), "ramo": ramo_atual(),
+            "flags": flags, "erro_sintaxe": erro, "mensagens": mensagens,
+        }
+        try:
+            return jstatus.montar_status(estado, largura, NERD)
+        except Exception as exc:     # a barra é enfeite: se falhar, não derruba o editor
+            registrar_erro(exc)
+            return [("class:status", f" {caminho.name}")]
 
     status = Window(
         content=FormattedTextControl(text=texto_status),
         height=1,
-        style="class:status",
+        style="class:st.bar",
     )
 
     corpo = VSplit([
@@ -1880,7 +1891,8 @@ def editar(arg_caminho: str) -> None:
     )
 
     # tema: jtheme.py se existir; senão o embutido
-    estilo = Style.from_dict({"busca": "reverse", "busca.atual": "bg:#e0af68 #1a1b26 bold", **_ESTILO})
+    estilo = Style.from_dict({"busca": "reverse", "busca.atual": "bg:#e0af68 #1a1b26 bold",
+                              **(jstatus.estilos_status(jtheme) if jstatus else {}), **_ESTILO})
 
     app = Application(
         layout=Layout(layout_completions, focused_element=editor),
