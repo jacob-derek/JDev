@@ -259,9 +259,24 @@ class Metrics:
 
     def start(self):
         threading.Thread(target=self._run_loop, daemon=True).start()
+        threading.Thread(target=self._loop_kbd, daemon=True).start()
 
     def stop(self):
         self.stop_ev.set()
+
+    def set_kbd(self, valor):
+        """Atualiza o layout na hora (usado logo depois de trocar pelo clique)."""
+        with self.lock:
+            self.data["kbd"] = valor
+
+    def _loop_kbd(self):
+        """Layout do teclado em tempo real: consulta leve a cada 0,3 s, fora da thread da interface."""
+        if not shutil.which("setxkbmap"):
+            return
+        while not self.stop_ev.wait(0.3):
+            atual = layout_atual()
+            if atual:
+                self.set_kbd(atual)
 
     def snapshot(self):
         with self.lock:
@@ -285,7 +300,6 @@ class Metrics:
 
         if self.stop_ev.wait(0.8):  # 1ª amostra logo depois do ponto de partida
             return
-        kbd_tick = 0
         while True:
             d = {}
             if psutil:
@@ -313,11 +327,6 @@ class Metrics:
                         readers.insert(0, readers.pop(i))
                     break
             d["play"] = ler_tocando() if tem_player else None
-            # Layout de teclado: polling mais lento (a cada 5 ciclos ~5 s)
-            kbd_tick += 1
-            if kbd_tick >= 5:
-                d["kbd"] = layout_atual()
-                kbd_tick = 0
             with self.lock:
                 self.data.update(d)
             if self.stop_ev.wait(INTERVAL):
@@ -551,7 +560,7 @@ class StatusBar(tk.Canvas):
         else:
             vseg = [("VOL ", DIM, False), (f"{vol}%", CYAN, False)]
         right = [("vol", vseg)]
-        kbd = d.get("kbd") or layout_atual()
+        kbd = d.get("kbd")
         if not compact and kbd:
             kbd_seg = [("KB ", DIM, False), (kbd.upper(), YELLOW if kbd != "br" else CYAN, True)]
             right.append(("kbd", kbd_seg))
@@ -663,7 +672,11 @@ class StatusBar(tk.Canvas):
         elif h[0] == "vol":
             em_thread(toggle_mute)
         elif h[0] == "kbd":
-            em_thread(lambda: mudar_layout())
+            def _trocar():
+                novo = mudar_layout()
+                if self.metrics:
+                    self.metrics.set_kbd(novo)
+            em_thread(_trocar)
         elif h[0] == "play":
             em_thread(controlar_player, "play-pause")
 
@@ -681,7 +694,7 @@ class StatusBar(tk.Canvas):
             self._render()
         except tk.TclError:
             return
-        self.job = self.after(1000, self.refresh)
+        self.job = self.after(250, self.refresh)
 
 
 SOLO_CHECK_MS = 2000   # de quanto em quanto tempo confere se o JWM ainda existe
