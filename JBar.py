@@ -20,6 +20,7 @@ Modo clean do JWM (jwm --no-ui):  python JBar.py --solo --wm-pid N
 import argparse
 import json
 import locale
+import math
 import os
 import re
 import shutil
@@ -364,6 +365,15 @@ def barra(pct):
     return BLOCOS[max(0, min(7, int(pct / 12.5)))]
 
 
+def equalizador(t, barras=3):
+    """Mini equalizador animado (só enfeite: não lê o áudio). `t` em segundos; cada barra balança em ritmo próprio."""
+    out = []
+    for i in range(barras):
+        v = 0.5 + 0.28 * math.sin(t * (5.1 + i * 1.7) + i * 2.1) + 0.22 * math.sin(t * (9.3 - i * 1.1) + i)
+        out.append(BLOCOS[max(0, min(7, int(v * 8)))])
+    return "".join(out) + " "
+
+
 def curto(texto, n):
     """Texto numa linha só, com no máximo n caracteres (termina em … se cortou)."""
     texto = " ".join(str(texto).split())
@@ -571,7 +581,7 @@ class StatusBar(tk.Canvas):
         play = d.get("play")
         if play and W >= 1400:   # só com espaço de sobra: o relógio nunca é espremido
             texto_faixa, tocando = play
-            right.insert(0, ("play", [("♪ " if tocando else "‖ ", GREEN if tocando else DIM, False),
+            right.insert(0, ("play", [(equalizador(time.monotonic()) if tocando else "‖ ", GREEN if tocando else DIM, False),
                                       (curto(texto_faixa, 26), FG, False)]))
         clock = ([] if compact else [(data + "  ", DIM, False)]) + [(hora, FG, True)]
         modo_wm = est.get("mode")

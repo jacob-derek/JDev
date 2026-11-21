@@ -150,9 +150,14 @@ def _arquivo() -> Path:
     return Path(base) / "jdev" / "theme"
 
 
+WALLPAPER = ("wallpaper", "wall", "auto")   # tema gerado a partir do wallpaper (jwall.py)
+
+
 def _resolver(nome: str | None) -> str | None:
     n = (nome or "").strip().lower()
     n = ALIASES.get(n, n)
+    if n in WALLPAPER:
+        return "wallpaper"
     return n if n in THEMES else None
 
 
@@ -198,7 +203,24 @@ def escolher_fonte(instaladas) -> str | None:
     return None
 
 
+def _tema_wallpaper() -> dict | None:
+    """Tema derivado do wallpaper sobre uma base escura (JTHEME_BASE, padrão void); None se não der."""
+    try:
+        import jwall
+        base = THEMES.get((os.environ.get("JTHEME_BASE") or "void").strip().lower()) or THEMES["void"]
+        t = jwall.gerar(base)
+        return {**t, "label": "Wallpaper"} if t else None
+    except Exception:
+        return None
+
+
 NOME = escolhido()
+if NOME == "wallpaper":
+    _gerado = _tema_wallpaper()
+    if _gerado:
+        THEMES["wallpaper"] = _gerado
+    else:                      # sem imagem/Pillow: segue com o tema padrão em vez de quebrar
+        NOME = PADRAO
 T = THEMES[NOME]
 LIGHT = bool(T["light"])
 
@@ -222,7 +244,7 @@ ON_ACCENT = T["on_accent"]   # texto sobre a cor de foco
 # destaque
 FOCUS = T["focus"]           # borda da janela focada (JWM) e workspace ativo (JBar)
 BORDER = T["border"]         # borda das janelas sem foco
-FLOAT = T["yellow"]          # janela flutuante
+FLOAT = T.get("float", T["yellow"])          # janela flutuante
 MODE = T["green"]            # modo resize ligado
 BLUE, GREEN, YELLOW, RED = T["blue"], T["green"], T["yellow"], T["red"]
 CYAN, PURPLE = T["cyan"], T["purple"]
@@ -363,6 +385,14 @@ def estilo_jshell() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 #  Linha de comando
 # ══════════════════════════════════════════════════════════════════════════════
+def misturar(a: str, b: str, t: float) -> str:
+    """Cor entre `a` e `b` (#rrggbb); t=0 -> a, t=1 -> b. Usada nas animações de borda do JWM."""
+    t = max(0.0, min(1.0, t))
+    ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(ca, cb, strict=True))
+
+
 def _bloco(hexcor: str) -> str:
     r, g, b = int(hexcor[1:3], 16), int(hexcor[3:5], 16), int(hexcor[5:7], 16)
     return f"\x1b[48;2;{r};{g};{b}m  \x1b[0m"
@@ -411,7 +441,7 @@ def validar(nome: str | None = None) -> list[tuple[str, str, str]]:
             continue
         for k in sorted(set(ref) - set(t)):
             saida.append(("ERRO", n, f"falta a chave '{k}'"))
-        for k in sorted(set(t) - set(ref)):
+        for k in sorted(set(t) - set(ref) - {"float"}):
             saida.append(("ERRO", n, f"chave desconhecida '{k}' (erro de digitacao?)"))
         invalido = False
         for k, v in t.items():
