@@ -1,6 +1,4 @@
-## Tema do wallpaper + movimento
-- `JTHEME=wallpaper` (ou `echo wallpaper > ~/.config/jdev/theme`): jwall.py acha a cor de destaque do wallpaper e deriva fundos, foco, bordas e a cor das janelas flutuantes dela. As cores de sintaxe/ANSI ficam as do tema base (`JTHEME_BASE`, padrão void). Cache em ~/.cache/jdev/wallpaper-theme.json; sem imagem/Pillow cai no tema padrão. Teste: `python3 jwall.py [imagem]`.
-- jtheme: papel opcional `float` (cor da borda flutuante; antes sempre amarelo) e `misturar()`.
-- JWM: fade da cor da borda ao mudar o foco (140 ms, ease-out; JWM_ANIM=0 desliga, JWM_ANIM_MS ajusta).
-- JBar: o `♪` do player virou um mini equalizador animado enquanto toca.
-- PICOM-ANIMACOES.md: fade (qualquer versão) ou animações do picom 12 (abrir/fechar/geometria).
+## Gato pixel na JBar
+- jcat.py: gato desenhado em código (sprites 16x12 em texto). Senta, anda de um lado a outro do espaço vazio da barra, dorme com zzz; com música tocando não dorme e balança; clique nele = carinho (coração).
+- JBar: o gato passeia no maior espaço livre (antes ou depois do relógio) e some se não couber. `JGATO=0` desliga. Sem jcat.py a barra é igual a antes.
+- tests: test_jcat (sprites, limites, estados) e test_jbar_gato (integração com tkinter de mentira).

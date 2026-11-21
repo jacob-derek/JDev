@@ -48,6 +48,10 @@ try:
     from jtheme import BAR_FONT
 except ImportError:
     BAR_FONT = 12
+try:  # o gatinho é opcional: sem jcat.py a barra segue igual
+    import jcat
+except ImportError:
+    jcat = None
 BAR_BG = DESK_BG   # o "vazio" entre as pílulas tem a cor do fundo do JDesk: parece transparente
 HOVER = PILL_HOVER
 
@@ -439,6 +443,12 @@ class StatusBar(tk.Canvas):
         self._hover = None
         self._hits = []           # (x1, x2, nome, dado) da última renderização
         self._sig = None
+        self.gato = jcat.Gato() if (jcat and os.environ.get("JGATO", "1").strip() != "0") else None
+        self.escala_gato = max(2, round(BAR_FONT / 6))
+        self._livre = None        # (x1, x2): o maior espaço vazio da barra, onde o gato passeia
+        self._gato_box = None
+        self._gato_t = time.monotonic()
+        self.job_gato = None
 
         self.bind("<Configure>", lambda e: self._render(force=True))
         self.bind("<Motion>", self._on_motion)
@@ -469,9 +479,11 @@ class StatusBar(tk.Canvas):
         self.metrics = metrics
         self.refresh()
         self.poll_estado()
+        if self.gato:
+            self._tick_gato()
 
     def stop(self):
-        for attr in ("job", "job_estado"):
+        for attr in ("job", "job_estado", "job_gato"):
             job = getattr(self, attr)
             if job:
                 try:
@@ -654,7 +666,51 @@ class StatusBar(tk.Canvas):
             disp = relogio_ini - GAP - esquerda_fim - 2 * self.PAD
             txt = self._elidir(titulo, disp)
             if txt and disp > 40:
-                self._pilula(esquerda_fim, y1, y2, [(txt, FG, False)])
+                esquerda_fim += self._pilula(esquerda_fim, y1, y2, [(txt, FG, False)]) + GAP
+
+        # ── espaço vazio (para o gato): antes e depois do relógio; fica com o maior ──
+        vazios = [(esquerda_fim + GAP, relogio_ini - GAP)]
+        if relogio_ini != direita_ini:
+            vazios.append((relogio_ini + cw + GAP, direita_ini - GAP))
+        melhor = max(vazios, key=lambda v: v[1] - v[0])
+        self._livre = melhor if melhor[1] - melhor[0] > 0 else None
+        self._desenhar_gato()
+
+    # ── gato ──
+    COR_GATO = {"B": FG, "D": DIM, "E": DARK, "N": RED, "Z": CYAN, "H": RED}
+
+    def _desenhar_gato(self):
+        self.delete("gato")
+        self._gato_box = None
+        g = self.gato
+        if not g or not g.visivel or not self._livre:
+            return
+        e = self.escala_gato
+        base = (self.HEIGHT + PILL_H) // 2 - 3          # "chão": perto do fundo das pílulas
+        topo = base - jcat.ALT * e
+        x0 = int(g.x)
+        for col, lin, ch in g.pixels():
+            cor = self.COR_GATO.get(ch)
+            if cor:
+                px, py = x0 + col * e, topo + lin * e
+                self.create_rectangle(px, py, px + e, py + e, fill=cor, outline="", tags="gato")
+        self._gato_box = (x0, topo, x0 + jcat.LARG * e, base)
+
+    def _tick_gato(self):
+        try:
+            agora = time.monotonic()
+            dt, self._gato_t = agora - self._gato_t, agora
+            if self._livre and self._visivel:
+                tocando = bool((self.dados.get("play") or (None, False))[1])
+                self.gato.passo(dt, self._livre[0], self._livre[1], self.escala_gato, tocando)
+                self._desenhar_gato()
+            else:
+                self.delete("gato")
+        except tk.TclError:
+            return
+        except Exception:          # enfeite: nunca derruba a barra
+            pass
+        self.job_gato = self.after(120, self._tick_gato)
 
     # ── mouse ──
     def _hit_em(self, x):
@@ -674,6 +730,11 @@ class StatusBar(tk.Canvas):
         self._set_hover(h if h and h[0] in ("tab", "vol", "kbd", "play") else None)
 
     def _on_click(self, e):
+        box = self._gato_box
+        if self.gato and box and box[0] <= e.x <= box[2] and box[1] - 8 <= e.y <= box[3]:
+            self.gato.carinho()                          # clicou no gato: coração
+            self._desenhar_gato()
+            return
         h = self._hit_em(e.x)
         if not h:
             return
