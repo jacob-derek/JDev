@@ -1,0 +1,24 @@
+#!/bin/sh
+# jfiles-picker - ponte entre o xdg-desktop-portal-termfilechooser e o JFiles (seletor de arquivos do Firefox).
+# O portal chama:  jfiles-picker MULTIPLE DIRECTORY SAVE CAMINHO ARQUIVO_DE_SAIDA
+#   (cada flag é 0 ou 1; CAMINHO = sugestão do app; o JFiles grava os escolhidos em ARQUIVO_DE_SAIDA)
+multiple="$1"; directory="$2"; save="$3"; path="$4"; out="$5"
+DIR=$(dirname "$(readlink -f "$0")")
+: > "$out"                                   # vazio = cancelado, se algo der errado
+
+set -- python3 "$DIR/JFiles.py" --pick --out "$out"
+[ "$multiple" = "1" ] && set -- "$@" --multiple
+[ "$directory" = "1" ] && set -- "$@" --dir
+if [ "$save" = "1" ]; then
+    set -- "$@" --save "$(basename "$path")" --start "$(dirname "$path")"
+else
+    [ -n "$path" ] && set -- "$@" --start "$path"
+fi
+
+# JTerm roda o comando dentro de uma janela própria (e só volta quando o JFiles fecha).
+# Outro terminal? exporte JPICKER_TERM, ex.: JPICKER_TERM="xterm -e"
+if [ -n "$JPICKER_TERM" ]; then
+    # shellcheck disable=SC2086
+    exec $JPICKER_TERM "$@"
+fi
+exec python3 "$DIR/JTerm.py" "$@"

@@ -63,6 +63,8 @@ class Arvore:
         """Divide a folha `alvo` (ou a última, se None/inexistente) e põe `wid` na metade nova."""
         if wid in self.folhas:
             return
+        if orient not in ("h", "v"):
+            orient = "h"
         if self.raiz is None:
             self.folhas[wid] = self.raiz = Folha(wid)
             return

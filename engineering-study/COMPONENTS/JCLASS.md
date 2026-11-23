@@ -1,0 +1,29 @@
+# JClass — Google Classroom announcement and attachment client
+
+JClass is a full-screen prompt_toolkit client for browsing Google Classroom announcements, extracting attached Drive files/links/videos, filtering and selecting downloadable files, and downloading Drive items into a course folder. It is a standalone tool under `tools/JClass`, not part of the JDesk core runtime ([tools/JClass/JClass.py:1-64](../../tools/JClass/JClass.py#L1)).
+
+## Authentication and API boundaries
+
+`testar_classroom.py` stores OAuth client credentials and user token in that tool directory. It requests read-only course/coursework-material/announcement scopes and Drive read-only, refreshes a saved token when possible, otherwise runs the installed-app browser flow ([tools/JClass/testar_classroom.py:1-46](../../tools/JClass/testar_classroom.py#L1)). JClass checks token usability before entering the TUI; it asks before opening a browser for first authorization/re-authorization ([tools/JClass/JClass.py:130-145](../../tools/JClass/JClass.py#L130), [tools/JClass/JClass.py:1030-1073](../../tools/JClass/JClass.py#L1030)).
+
+`classroom_api.py` owns API pagination, typed `Aviso`/`Item` models, URL extraction, duplicate elimination, and mapping API/network errors to user-facing messages ([tools/JClass/classroom_api.py:34-125](../../tools/JClass/classroom_api.py#L34), [tools/JClass/classroom_api.py:127-203](../../tools/JClass/classroom_api.py#L127), [tools/JClass/classroom_api.py:217-292](../../tools/JClass/classroom_api.py#L217)). Drive attachments are downloadable; links and YouTube videos are open/copy/view only. URL patterns recognize Drive IDs and YouTube IDs in both attachment metadata and announcement text.
+
+## UI lifecycle and state machine
+
+`JClass` owns the current view (`carregando`, `turmas`, `lista`, `menu`, `texto`, `confirmar`, `baixando`), course/items, filters, selection, download policy, cancellation event, and progress. Loading runs in a worker thread and advances visible phases: credentials, Google auth, courses, announcements, attachment extraction ([tools/JClass/JClass.py:147-217](../../tools/JClass/JClass.py#L147), [tools/JClass/JClass.py:243-320](../../tools/JClass/JClass.py#L243)). When multiple courses are available and no preferred course resolves, the user selects a course; `--curso` overrides the default ID. Re-fetching preserves selected/downloaded item state when keys still match ([tools/JClass/JClass.py:321-340](../../tools/JClass/JClass.py#L321)).
+
+Filtering combines a type filter with accent-insensitive substring search over item title, announcement title, and URL ([tools/JClass/JClass.py:342-406](../../tools/JClass/JClass.py#L342)). The main key map uses arrows/j/k, Space to mark, `a` mark all, `n` clear selection, `/` search, Tab cycle type, `d` download, `c` switch class, `r` refresh, Enter actions, `?` help, `q` exit, and Escape to unwind/cancel ([tools/JClass/JClass.py:584-697](../../tools/JClass/JClass.py#L584)).
+
+## Download transaction and conflict policy
+
+Before downloading, JClass shows a confirmation view and lets the user choose rename, ignore, or replace when a destination already exists. Downloads run in a daemon worker, one item at a time, with a cancellation event checked between chunks. Progress updates the model and invalidates prompt_toolkit rendering. Failures can be retried; exit while downloading requests cancellation and waits for worker completion ([tools/JClass/JClass.py:482-579](../../tools/JClass/JClass.py#L482)).
+
+`drive_download.py` creates a read-only Drive v3 client, sanitizes filenames, maps Google-native document types to PDF/XLSX export MIME types, adds extensions from MIME metadata, and rejects folder/form/shortcut types ([tools/JClass/drive_download.py:17-87](../../tools/JClass/drive_download.py#L17)). It downloads in 1 MiB chunks into a `.part` sibling; cancellation/errors remove the partial file, and only a completed transfer is atomically renamed into place ([tools/JClass/drive_download.py:89-114](../../tools/JClass/drive_download.py#L89)). Google-native export has the API’s 10 MB limit. On successful download, JClass sends JIPC `refresh` for the destination folder so JFiles updates without manual refresh ([tools/JClass/JClass.py:532-569](../../tools/JClass/JClass.py#L532)).
+
+## Practical operation and developer guide
+
+Run JClass from an interactive terminal. Provide OAuth Desktop client `credentials.json` in `tools/JClass` and authorize explicitly on first use. Choose a course, filter to files or other item types, mark Drive files, press `d`, review destination and conflict policy, then confirm. Default output is `BASE/downloads/<safe-course-name>`; `--destino` changes the folder and `--ascii` selects terminal-safe glyphs ([tools/JClass/JClass.py:1022-1027](../../tools/JClass/JClass.py#L1022)).
+
+The external side effects are Google API reads, OAuth token creation/refresh, network downloads, and local file writes. This study did not invoke those actions. When debugging, trace authentication setup, API page/model extraction, filter state, confirmation policy, worker progress callback, then `.part`/atomic replacement. API errors retain technical details in `jclass.log`; expected errors are translated into actionable user messages.
+
+Engineering strengths include minimal read-only scopes, explicit permission/overwrite choices, bounded chunk memory, partial-file cleanup, cancellation, retry, and an app-level JIPC refresh. Limitations include OAuth consent/project setup, API export restrictions, dependence on network and Google quotas, and a hardcoded preferred default course ID that may not be meaningful for another account. Existing source contains some repeated-looking lines in lists/initialization; treat UI duplicate menu/help entries as a code-review item rather than assuming behavior from names alone. No tests or external services were run.

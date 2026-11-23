@@ -1,0 +1,75 @@
+# Todas as letras, formas e quadros sao PNGs gerados previamente.
+Window.SetBackgroundTopColor(0.051, 0.067, 0.082);
+Window.SetBackgroundBottomColor(0.051, 0.067, 0.082);
+
+title.image = Image("titulo.png");
+title.sprite = Sprite(title.image);
+title.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - title.image.GetWidth() / 2,
+                         Window.GetY() + 110, 10);
+
+divider.image = Image("divisoria.png");
+divider.sprite = Sprite(divider.image);
+divider.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - divider.image.GetWidth() / 2,
+                           Window.GetY() + 140, 1);
+
+logo.image = Image("void-logo.png");
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - 250,
+                        Window.GetY() + 205, 2);
+
+system.image = Image("sistema.png");
+system.sprite = Sprite(system.image);
+system.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - 115,
+                          Window.GetY() + 218, 3);
+
+for (i = 0; i < 4; i++)
+  {
+    label.image[i] = Image("dado-" + i + "-label.png");
+    label.sprite[i] = Sprite(label.image[i]);
+    label.sprite[i].SetPosition(Window.GetX() + Window.GetWidth() / 2 - 115,
+                                Window.GetY() + 258 + i * 43, 3);
+    value.image[i] = Image("dado-" + i + "-valor.png");
+    value.sprite[i] = Sprite(value.image[i]);
+    value.sprite[i].SetPosition(Window.GetX() + Window.GetWidth() / 2 - 115,
+                                Window.GetY() + 275 + i * 43, 3);
+  }
+
+track.image = Image("progresso-trilho.png");
+track.sprite = Sprite(track.image);
+track.x = Window.GetX() + Window.GetWidth() / 2 - track.image.GetWidth() / 2;
+track.y = Window.GetY() + 535;
+track.sprite.SetPosition(track.x, track.y, 4);
+
+progress.sprite = Sprite(Image("progresso-000.png"));
+progress.sprite.SetPosition(track.x, track.y, 5);
+
+indicator.frame = 0;
+indicator.sprite = Sprite(Image("indicador-0.png"));
+indicator.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - 220,
+                             Window.GetY() + 603, 6);
+
+footer.frame = 0;
+footer.sprite = Sprite(Image("rodape-0.png"));
+footer.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - 90,
+                          Window.GetY() + Window.GetHeight() - 66, 6);
+
+fun progress_callback (duration, fraction)
+  {
+    local percent;
+    percent = Math.Int(fraction * 100);
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+    progress.sprite.SetImage(Image("progresso-" + percent + ".png"));
+  }
+
+Plymouth.SetBootProgressFunction(progress_callback);
+
+fun refresh_callback ()
+  {
+    indicator.frame = (indicator.frame + 1) % 20;
+    indicator.sprite.SetImage(Image("indicador-" + indicator.frame + ".png"));
+    footer.frame = (footer.frame + 1) % 4;
+    footer.sprite.SetImage(Image("rodape-" + footer.frame + ".png"));
+  }
+
+Plymouth.SetRefreshFunction(refresh_callback);

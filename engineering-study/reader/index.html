@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f5f3ee">
+  <title>JDev Engineering Study</title>
+  <link rel="stylesheet" href="/engineering-study/reader/reader.css">
+</head>
+<body>
+  <div class="reading-progress" aria-hidden="true"><span id="reading-progress-fill"></span></div>
+  <header class="topbar">
+    <button class="icon-button toc-toggle" id="toc-toggle" aria-label="Open table of contents" aria-expanded="false" title="Table of contents">
+      <span class="menu-glyph" aria-hidden="true"></span>
+    </button>
+    <a class="brand" href="./" aria-label="JDev Engineering Study home">
+      <span class="brand-mark" aria-hidden="true">J</span>
+      <span class="brand-copy"><strong>JDev</strong><small>Engineering study</small></span>
+    </a>
+    <div class="topbar-spacer"></div>
+    <button class="search-trigger" id="search-trigger" aria-label="Search the study">
+      <span aria-hidden="true">⌕</span><span class="search-label">Search the study</span><kbd>⌘ K</kbd>
+    </button>
+    <button class="icon-button theme-toggle" id="theme-toggle" aria-label="Switch color theme" title="Switch theme"><span aria-hidden="true">◐</span></button>
+  </header>
+
+  <div class="reader-shell">
+    <div class="scrim" id="scrim"></div>
+    <aside class="sidebar" id="sidebar" aria-label="Book contents">
+      <div class="sidebar-top">
+        <div class="eyebrow">THE ENGINEERING BOOK</div>
+        <div class="sidebar-book-title">JDev, from the inside out</div>
+        <div class="book-progress-copy"><span id="completed-count">0 of 31 complete</span><span id="completed-percent">0%</span></div>
+        <div class="book-progress-track"><span id="book-progress-fill"></span></div>
+      </div>
+      <nav class="toc" id="toc" aria-label="Chapters"></nav>
+      <div class="sidebar-footer">
+        <span class="source-note"><span class="source-dot"></span> Original Markdown chapters</span>
+        <a href="../INDEX.md" target="_blank" rel="noopener">Open study index ↗</a>
+      </div>
+    </aside>
+
+    <main class="reading-column" id="reading-column">
+      <div class="mobile-chapter-label" id="mobile-chapter-label"></div>
+      <div class="chapter-toolbar" id="chapter-toolbar" hidden>
+        <div class="breadcrumb" id="breadcrumb"></div>
+        <button id="complete-button" class="complete-button" aria-pressed="false">
+          <span class="checkmark" aria-hidden="true">✓</span><span>Mark chapter complete</span>
+        </button>
+      </div>
+      <article class="chapter" id="chapter" tabindex="-1" aria-live="polite">
+        <section class="welcome" id="welcome">
+          <div class="welcome-kicker"><span class="welcome-rule"></span> A GUIDED ENGINEERING STUDY</div>
+          <h1>Understand JDev<br><em>from the inside out.</em></h1>
+          <p class="welcome-lede">A source-grounded technical book about the environment you built: how its programs work, where their boundaries are, and how they fit together.</p>
+          <div class="welcome-meta"><span>31 chapters</span><span class="meta-dot">·</span><span>5 reading sections</span><span class="meta-dot">·</span><span>Built from the original study files</span></div>
+          <button class="begin-button" id="begin-button">Begin reading <span aria-hidden="true">→</span></button>
+          <div class="welcome-note">Your place, reading preferences, and completed chapters stay in this browser.</div>
+        </section>
+        <div class="chapter-content" id="chapter-content"></div>
+      </article>
+      <nav class="chapter-nav" id="chapter-nav" aria-label="Previous and next chapters" hidden></nav>
+      <footer class="reader-footer"><span>JDev Engineering Study</span><span>Original Markdown is the source of truth.</span></footer>
+    </main>
+  </div>
+
+  <section class="search-overlay" id="search-overlay" aria-label="Search chapters" aria-hidden="true">
+    <div class="search-dialog" role="dialog" aria-modal="true" aria-labelledby="search-title">
+      <div class="search-input-wrap"><span class="search-symbol" aria-hidden="true">⌕</span><input id="search-input" type="search" placeholder="Search concepts, programs, and code…" autocomplete="off"><kbd>ESC</kbd></div>
+      <div class="search-status" id="search-status"><span id="search-title">Search across the engineering study</span><span>Type at least 2 characters</span></div>
+      <div class="search-results" id="search-results"></div>
+      <div class="search-hint"><span>Enter to open</span><span>↑ ↓ to move</span><span>Esc to close</span></div>
+    </div>
+  </section>
+
+  <script src="/engineering-study/reader/markdown.js"></script>
+  <script src="/engineering-study/reader/app.js" defer></script>
+</body>
+</html>

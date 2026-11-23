@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 
 REG_INI, SEP, REG_FIM = b"\x1e", b"\x1f", b"\x1d"
+LIMITE_INICIO = 10.0   # segundos que o bash tem para responder ao iniciar (init com erro não trava mais o JShell)
 
 # Linha "simples" (só palavras): dispensa a checagem de sintaxe com `bash -n`.
 _PLANA = re.compile(r"[\w@%+=:,./~ -]+")
@@ -143,6 +144,19 @@ __jsh_complete() {
   local cmd=${COMP_WORDS[0]} cur=${COMP_WORDS[cword]-} prev= spec tries=0 rc
   (( cword > 0 )) && prev=${COMP_WORDS[cword-1]}
   local __jc_F __jc_W __jc_A __jc_o
+  # As funções do bash-completion (_filedir, _cd...) chamam `compopt -o filenames` para pedir a "/"
+  # no fim das pastas. Fora de uma completion de verdade o compopt falha e o pedido se perdia: este
+  # substituto (só durante esta chamada) anota as opções para o JShell aplicar.
+  compopt() {
+    while (( $# )); do
+      case $1 in
+        -o) __jc_o="$__jc_o $2"; shift ;;
+        +o) __jc_o=" ${__jc_o// $2/}"; shift ;;
+      esac
+      shift
+    done
+    return 0
+  }
   while (( tries++ < 3 )); do
     spec=$(complete -p -- "$cmd" 2>/dev/null)
     if [[ -z $spec ]]; then
@@ -157,11 +171,14 @@ __jsh_complete() {
       "$__jc_F" "$cmd" "$cur" "$prev" >/dev/null 2>&1; rc=$?
       (( rc == 124 )) && continue
     fi
+    # -f / -d (ou -A file/directory) também são nomes de arquivo: pasta ganha "/" no fim
+    [[ " $__jc_A " == *" file "* || " $__jc_A " == *" directory "* ]] && __jc_o="$__jc_o filenames"
     [[ -n $__jc_W ]] && COMPREPLY+=( $(compgen -W "$__jc_W" -- "$cur") )
     local a
     for a in $__jc_A; do COMPREPLY+=( $(compgen -A "$a" -- "$cur") ); done
     break
   done
+  unset -f compopt
   {
     printf '\036C\037%s\037' "$__jc_o"
     (( ${#COMPREPLY[@]} )) && printf '%s\0' "${COMPREPLY[@]}"
@@ -237,10 +254,32 @@ class Motor:
                 self.proc = None
                 return False
             self.nativos = self._nomes_nativos(bash)
-            ok = self._aguardar("S", 0) is not None
+            ok = self._aguardar("S", 0, limite=LIMITE_INICIO) is not None
             if not ok:
-                self.ultimo_erro = "o bash não respondeu ao iniciar"
+                self.ultimo_erro = self._erro_do_bash() or "o bash não respondeu ao iniciar"
+                self._abandonar()
             return ok
+
+    def _abandonar(self):
+        """Mata um bash que não deu sinal de vida e solta os descritores."""
+        if self.proc is not None:
+            try:
+                self.proc.kill()
+                self.proc.wait(timeout=1)
+            except (OSError, subprocess.SubprocessError):
+                pass
+        self.proc = None
+        self._fechar_fds()
+
+    @staticmethod
+    def _erro_do_bash() -> str:
+        """Últimas linhas do log de erro do bash (ex.: erro de sintaxe no ~/.bashrc)."""
+        base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "jshell"
+        try:
+            linhas = (base / "motor.err").read_text(encoding="utf-8", errors="replace").strip().splitlines()
+        except OSError:
+            return ""
+        return "o bash não respondeu ao iniciar: " + " | ".join(linhas[-2:]) if linhas else ""
 
     @staticmethod
     def _drenar(fd):
@@ -264,8 +303,14 @@ class Motor:
         base = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "jshell"
         base.mkdir(parents=True, exist_ok=True)
         arq = base / "init.bash"
-        if not arq.exists() or arq.read_text(encoding="utf-8") != INIT:
-            arq.write_text(INIT, encoding="utf-8")
+        try:
+            igual = arq.read_text(encoding="utf-8") == INIT
+        except OSError:
+            igual = False
+        if not igual:   # grava inteiro e troca de uma vez: um arquivo pela metade quebraria o bash
+            tmp = arq.with_name(f"init.bash.{os.getpid()}.tmp")
+            tmp.write_text(INIT, encoding="utf-8")
+            os.replace(tmp, arq)
         return arq
 
     @staticmethod
@@ -299,13 +344,15 @@ class Motor:
             self._fechar_fds()
 
     # ── protocolo ──────────────────────────────────────────────────────────
-    def _aguardar(self, tipo, seq=None, coletar=None):
+    def _aguardar(self, tipo, seq=None, coletar=None, limite=None):
         """Lê registros do pipe de estado até chegar o do `tipo` ('S' = fim de comando) com o
         número `seq`. Registros de outros tipos vão para `coletar`; 'S' de outro número é lixo
         de um comando anterior e é descartado. None se o bash morreu.
         Depois de um Ctrl+C sem resposta em 0,6 s (aspa aberta que escapou da checagem, por
-        exemplo), reenvia o aviso: o bash já abortou a leitura pendente e volta ao prompt."""
+        exemplo), reenvia o aviso: o bash já abortou a leitura pendente e volta ao prompt.
+        `limite` (segundos) desiste e devolve None; sem limite espera quanto o comando durar."""
         reenviado = False
+        prazo = None if limite is None else time.monotonic() + limite
         while True:
             ini = self._buf.find(REG_INI)
             fim = self._buf.find(REG_FIM, ini + 1) if ini >= 0 else -1
@@ -323,6 +370,8 @@ class Motor:
                     coletar.append(reg)
                 continue
             if self.proc is None or self.proc.poll() is not None:
+                return None
+            if prazo is not None and time.monotonic() > prazo:
                 return None
             if (self._int_t is not None and not reenviado and seq is not None
                     and time.monotonic() - self._int_t > 0.6):

@@ -11,6 +11,9 @@ Atalhos principais:
   Ctrl+O sumário · Ctrl+E explorar (setas ignoram o autocomplete) · Ctrl+L selecionar linhas
   Ctrl+K apagar linha · Ctrl+A selecionar tudo · Ctrl+C/V copiar/colar
   Tab/Shift+Tab indentar/recuar · Alt+Backspace apagar palavra
+  Ctrl+F buscar (Enter/↓ próximo, ↑ anterior, Esc fecha) · Ctrl+↓/↑ rolar a tela sem mover o texto
+  F3 quebra de linha visual · F4 auto-fechar ( [ { " '
+Comandos:  jcode <arquivo> · jcode -map <arquivo> (mapa da estrutura no terminal) · jcode -setup (configurar)
 """
 import ast
 import asyncio
@@ -51,6 +54,22 @@ from prompt_toolkit.layout.menus import CompletionsMenu
 from prompt_toolkit.layout.processors import Processor, Transformation
 from prompt_toolkit.lexers import Lexer, PygmentsLexer
 from prompt_toolkit.styles import Style
+
+try:
+    import jstatus
+except ImportError:   # sem o jstatus.py a barra fica mínima
+    jstatus = None
+
+try:
+    import jicons
+    NERD = jicons.MODO == "nerd"
+except ImportError:
+    NERD = False
+
+try:
+    import jcursor
+except ImportError:   # sem o jcursor.py o cursor fica como o terminal quiser
+    jcursor = None
 
 from pygments.lexers import get_lexer_for_filename
 from pygments.util import ClassNotFound
@@ -122,6 +141,16 @@ ANALISE_DEBOUNCE_MAX = 2.0
 ORCAMENTO_UNDO_CHARS = 100_000_000  # memória máxima (em caracteres) do histórico de undo
 ESC_TIMEOUT = 0.05                # espera para distinguir Esc de Alt+tecla/setas
 MOUSE_ATIVO = True
+EXT_SEM_AUTO_FECHAR = {".txt", ".md", ".markdown", ".rst"}  # prosa: aspas e parênteses ficam como digitados
+LIMITE_BUSCA = 20_000                # máximo de ocorrências marcadas na busca
+PASSO_ROLAGEM = 3                   # linhas por Ctrl+↓/↑
+EXT_SEM_LIMPEZA = {".md", ".markdown"}  # nelas dois espaços no fim da linha significam quebra de linha
+
+# Mapa do arquivo (minimapa): cada célula de braille tem 2x4 pontos.
+MAPA_COLUNAS = 14                 # largura do mapa em colunas do terminal
+MAPA_CHARS_POR_PX = 3             # quantos caracteres do texto cabem em 1 ponto de largura
+MAPA_LARGURA_MIN = 72             # só mostra o mapa se sobrar pelo menos isso para o editor
+LIMITE_MAPA_CHARS = 600_000       # acima disso o mapa não é calculado
 
 
 PALAVRAS_CHAVE_PYTHON = [
@@ -141,6 +170,7 @@ PALAVRAS_POR_EXTENSAO = {
 
 RE_IDENTIFICADOR = re.compile(r"[^\W\d]\w*")          # aceita acentos (área, índice…)
 RE_FINAL_PALAVRA = re.compile(r"\w+$")
+RE_NAO_ESPACO = re.compile(r"\S+")
 RE_DEF = re.compile(r"^([ \t]*)(async[ \t]+def|def|class)[ \t]+([^\W\d]\w*)", re.MULTILINE)
 
 
@@ -303,11 +333,325 @@ def buscar_sugestoes(indice: List[str], prefixo: str, limite: int = MAX_SUGESTOE
     return saida
 
 
+def limpar_espacos_finais(texto: str, linha_cursor: Optional[int] = None, coluna_cursor: int = 0) -> Tuple[str, int]:
+    """Tira espaços/tabs do fim de cada linha. Devolve (texto, quantas_linhas_mudaram).
+
+    A linha do cursor é poupada quando o cursor está dentro do espaço final (ex.: a
+    indentação automática acabou de ser inserida): senão o cursor "pularia" para a coluna 0.
+    """
+    linhas = texto.split("\n")
+    mudou = 0
+    for i, linha in enumerate(linhas):
+        limpa = linha.rstrip(" \t")
+        if limpa == linha:
+            continue
+        if i == linha_cursor and coluna_cursor > len(limpa):
+            continue
+        linhas[i] = limpa
+        mudou += 1
+    return "\n".join(linhas), mudou
+
+
+def tab_ignorar(linha: str, coluna: int) -> bool:
+    """True se o Tab deve ser ignorado: cursor no fim de uma linha que já tem código.
+
+    Em linha vazia (ou só com espaços) o Tab continua indentando.
+    """
+    coluna = max(0, min(coluna, len(linha)))
+    return not linha[coluna:].strip() and bool(linha[:coluna].strip())
+
+
+# ── Auto-fechar pares ( ) [ ] { } " ' ───────────────────────────────────────────
+_ABRE = {"(": ")", "[": "]", "{": "}"}
+_FECHA = {v: k for k, v in _ABRE.items()}
+_PARES_VAZIOS = {("(", ")"), ("[", "]"), ("{", "}"), ('"', '"'), ("'", "'")}
+_PREFIXOS_STR = {"f", "r", "b", "u", "rb", "br", "fr", "rf"}
+RE_PREFIXO_STR = re.compile(r"(?<!\w)([A-Za-z]{1,2})$")
+
+
+def _livre_a_direita(proximo: str) -> bool:
+    """Só fecha automaticamente se a direita do cursor está livre (fim, espaço ou outro fechamento)."""
+    return proximo == "" or proximo.isspace() or proximo in ")]},;:"
+
+
+def decidir_auto_fechar(c: str, antes: str, depois: str) -> Tuple[str, str, int]:
+    """O que fazer ao digitar `c`. Devolve (acao, texto, recuo):
+
+      ("normal", c, 0)        insere só o caractere
+      ("inserir", texto, n)   insere `texto` e volta o cursor `n` casas (par: "()" com cursor no meio)
+      ("pular", "", 0)        o caractere já está à direita: só anda por cima dele
+
+    `antes` é o trecho antes do cursor (basta o final) e `depois` o começo do que vem depois.
+    Na dúvida devolve "normal": o pior caso é o editor se comportar como sempre.
+    """
+    prox = depois[:1]
+    if c in _ABRE:
+        return ("inserir", c + _ABRE[c], 1) if _livre_a_direita(prox) else ("normal", c, 0)
+    if c in _FECHA:
+        if prox == c and antes.count(_FECHA[c]) > antes.count(c):   # há um abre esperando
+            return ("pular", "", 0)
+        return ("normal", c, 0)
+    if c in "\"'":
+        linha = antes.rsplit("\n", 1)[-1]
+        anterior = linha[-1:]
+        if anterior == "\\":                      # aspa escapada
+            return ("normal", c, 0)
+        dentro = linha.count(c) % 2 == 1        # já há uma aspa igual aberta nesta linha
+        if dentro:
+            return ("pular", "", 0) if prox == c else ("normal", c, 0)
+        if linha.endswith(c * 2) and not linha.endswith(c * 3) and _livre_a_direita(prox):
+            return ("inserir", c * 4, 3)         # terceira aspa: abre """ ... """
+        if anterior.isalnum() or anterior == "_":   # don't, it's... (exceto prefixos f"", r'', b"")
+            m = RE_PREFIXO_STR.search(linha)
+            if not (m and m.group(1).lower() in _PREFIXOS_STR):
+                return ("normal", c, 0)
+        outra = "'" if c == '"' else '"'
+        if linha.count(outra) % 2 == 1:         # aspa de outro tipo aberta: esta é texto
+            return ("normal", c, 0)
+        return ("inserir", c + c, 1) if _livre_a_direita(prox) else ("normal", c, 0)
+    return ("normal", c, 0)
+
+
+def par_vazio(antes: str, depois: str) -> bool:
+    """True se o cursor está entre um par vazio: () [] {} "" ''."""
+    return (antes[-1:], depois[:1]) in _PARES_VAZIOS
+
+
+def ignorar_sequencias_modificadas() -> int:
+    """Teclas combinadas desconhecidas (Ctrl+PageUp, Shift+F5...) viram <ignore> em vez de texto.
+
+    O terminal manda algo como ESC [ 5 ; 5 ~ ; se o prompt_toolkit não conhece a sequência,
+    ela chegava ao editor como os caracteres "[5;5~". Devolve quantas sequências foram adicionadas.
+    """
+    try:
+        from prompt_toolkit.input.ansi_escape_sequences import ANSI_SEQUENCES
+    except ImportError:
+        return 0
+    novos = 0
+    for mod in range(2, 9):
+        candidatas = [f"\x1b[1;{mod}{letra}" for letra in "ABCDHFPQRS"]
+        candidatas += [f"\x1b[{n};{mod}~" for n in (2, 3, 5, 6, 7, 8, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21, 23, 24)]
+        for seq in candidatas:
+            if seq not in ANSI_SEQUENCES:
+                ANSI_SEQUENCES[seq] = Keys.Ignore
+                novos += 1
+    return novos
+
+
+# ── Busca (Ctrl+F) ──────────────────────────────────────────────────────────────
+def compilar_busca(termo: str):
+    """Regex literal do termo. Sem maiúsculas no termo, ignora maiúsculas/minúsculas (smart case)."""
+    if not termo:
+        return None
+    flags = 0 if any(c.isupper() for c in termo) else re.IGNORECASE
+    return re.compile(re.escape(termo), flags)
+
+
+def buscar_ocorrencias(texto: str, termo: str, limite: int = LIMITE_BUSCA) -> List[int]:
+    """Posições (índices no texto) onde o termo começa, sem sobreposição, até `limite`."""
+    rx = compilar_busca(termo)
+    if rx is None:
+        return []
+    saida: List[int] = []
+    for m in rx.finditer(texto):
+        saida.append(m.start())
+        if len(saida) >= limite:
+            break
+    return saida
+
+
+def escolher_ocorrencia(posicoes: List[int], pos: int, sentido: int = 1) -> int:
+    """Índice da próxima ocorrência a partir de `pos` (sentido 1: em `pos` ou depois; -1: antes de `pos`).
+    Dá a volta no arquivo. -1 se não há ocorrências."""
+    if not posicoes:
+        return -1
+    if sentido >= 0:
+        i = bisect.bisect_left(posicoes, pos)
+        return i if i < len(posicoes) else 0
+    i = bisect.bisect_left(posicoes, pos) - 1
+    return i if i >= 0 else len(posicoes) - 1
+
+
+# ── Mapa no terminal (jcode -map) ───────────────────────────────────────────────
+def mapa_em_texto(texto: str, extensao: str, nome: str = "", largura: int = 80, altura: int = 30,
+                  cor: bool = False) -> str:
+    """Mapa da estrutura do arquivo: densidade em braille + intervalo de linhas + blocos de cada trecho."""
+    if len(texto) > LIMITE_MAPA_CHARS:
+        return f"{nome}: arquivo grande demais para mapear ({len(texto)} caracteres)\n"
+    perfil = perfil_linhas(texto)
+    if texto.endswith("\n"):
+        perfil = perfil[:-1]      # a "linha" depois do último \n não existe
+    total = len(perfil)
+    if total == 0 or not texto.strip():
+        return f"{nome}: arquivo vazio\n"
+    dim, reset, azul, vermelho = ("\x1b[2m", "\x1b[0m", "\x1b[36m", "\x1b[31m") if cor else ("", "", "", "")
+    linhas_mapa = max(4, min(60, altura - 5))
+    colunas = MAPA_COLUNAS     # o perfil tem 2 pontos por coluna de braille
+    blocos = montar_mapa(perfil, linhas_mapa, colunas)
+
+    if extensao == ".py":
+        itens = [(l, nome_bloco) for l, _, nome_bloco in extrair_outline(texto)]
+    elif extensao in (".md", ".markdown"):
+        itens = [(i, l.strip()) for i, l in enumerate(texto.splitlines()) if l.startswith("#")]
+    else:
+        itens = []
+    erro = None
+    if extensao == ".py" and len(texto) <= LIMITE_SINTAXE_CHARS:
+        try:
+            ast.parse(texto)
+        except SyntaxError as e:
+            erro = (e.lineno or 0) - 1, e.msg
+        except Exception:
+            pass
+
+    saida = [f"{nome}  ·  {total} linhas  ·  {len(itens)} bloco(s)" + (f"  ·  {vermelho}erro de sintaxe L{erro[0] + 1}{reset}" if erro else ""), ""]
+    largura_nomes = max(10, largura - colunas - 16)
+    for braille, a, b in blocos:
+        achados = [n for l, n in itens if a <= l < b]
+        nomes = ", ".join(achados)
+        if len(nomes) > largura_nomes:
+            nomes = nomes[:largura_nomes - 1] + "…"
+        marca = f" {vermelho}✗{reset}" if erro and a <= erro[0] < b else ""
+        intervalo = f"L{a + 1}" if b - a <= 1 else f"L{a + 1}-{b}"
+        saida.append(f"{dim}{braille.ljust(colunas)}{reset}  {dim}{intervalo:<11}{reset}{azul}{nomes}{reset}{marca}".rstrip())
+    return "\n".join(saida) + "\n"
+
+
+# ── Configuração (jcode -setup) ─────────────────────────────────────────────────
+def _perguntar(entrada, saida, titulo: str, opcoes: List[str], atual: int) -> Optional[int]:
+    """Menu numerado. Devolve o índice escolhido, o `atual` se der só Enter, ou None se cancelou (Ctrl+C/Ctrl+D)."""
+    saida(titulo)
+    for i, nome in enumerate(opcoes, 1):
+        saida(f"  {i}) {nome}")
+    for _ in range(3):
+        try:
+            resp = entrada(f"Escolha [1-{len(opcoes)}] (Enter mantém: {opcoes[atual]}): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if not resp:
+            return atual
+        if resp.isdigit() and 1 <= int(resp) <= len(opcoes):
+            return int(resp) - 1
+        saida("  Opção inválida.")
+    return atual
+
+
+def executar_setup(entrada=input, saida=print, caminho: Optional[Path] = None) -> bool:
+    """Menu de configuração do JCode. True se salvou."""
+    if jcursor is None:
+        saida("jcode -setup precisa do jcursor.py (está na pasta do JDev).")
+        return False
+    cfg = jcursor.carregar(caminho)
+    formas = list(jcursor.FORMAS)
+    nomes = [jcursor.NOMES_FORMA[f] for f in formas]
+    saida("JCode — configuração (Ctrl+C cancela)\n")
+    i = _perguntar(entrada, saida, "Tipo do cursor:", nomes, formas.index(cfg["cursor"]))
+    if i is None:
+        saida("\nCancelado, nada foi alterado.")
+        return False
+    saida("")
+    j = _perguntar(entrada, saida, "Cursor piscando?", ["Sim", "Não"], 0 if cfg["piscar"] else 1)
+    if j is None:
+        saida("\nCancelado, nada foi alterado.")
+        return False
+    cfg = {"cursor": formas[i], "piscar": j == 0}
+    arq = jcursor.salvar(cfg, caminho)
+    saida(f"\nSalvo em {arq}")
+    saida("Vale na próxima vez que abrir o JCode.")
+    return True
+
+
+def perfil_linhas(texto: str, px: int = MAPA_COLUNAS * 2, chars: int = MAPA_CHARS_POR_PX) -> List[int]:
+    """Uma máscara de bits por linha: o bit i vale 1 se há texto entre as colunas [i*chars, (i+1)*chars)."""
+    saida: List[int] = []
+    for linha in texto.split("\n"):
+        mascara = 0
+        if linha and not linha.isspace():
+            for m in RE_NAO_ESPACO.finditer(linha.expandtabs(4)):
+                a = m.start() // chars
+                if a >= px:
+                    break
+                b = min(px - 1, (m.end() - 1) // chars)
+                mascara |= ((1 << (b + 1)) - 1) & ~((1 << a) - 1)
+        saida.append(mascara)
+    return saida
+
+
+# Posição do ponto (linha 0-3, coluna 0-1) dentro de um caractere braille (U+2800 + bits).
+_BRAILLE = ((0x01, 0x08), (0x02, 0x10), (0x04, 0x20), (0x40, 0x80))
+
+
+def montar_mapa(perfil: List[int], altura: int, colunas: int = MAPA_COLUNAS) -> List[Tuple[str, int, int]]:
+    """Comprime o arquivo inteiro em até `altura` linhas de braille.
+
+    Devolve [(texto, primeira_linha, fim_exclusivo)]: o intervalo de linhas do arquivo que cada
+    linha do mapa representa (usado para marcar cursor/janela e para o clique pular até lá).
+    """
+    n = len(perfil)
+    if n == 0 or altura <= 0:
+        return []
+    pixels = min(4 * altura, n)            # linhas de ponto realmente usadas
+    passo = max(1.0, n / (4 * altura))     # linhas do arquivo por linha de ponto
+    inicio = [min(n - 1, int(k * passo)) for k in range(pixels)]
+    fim = [n if k == pixels - 1 else max(inicio[k] + 1, int((k + 1) * passo)) for k in range(pixels)]
+    mascaras = []
+    for a, b in zip(inicio, fim, strict=True):
+        m = 0
+        for i in range(a, min(b, n)):
+            m |= perfil[i]
+        mascaras.append(m)
+
+    saida = []
+    for r in range((pixels + 3) // 4):
+        celulas = []
+        for c in range(colunas):
+            codigo = 0
+            for j in range(4):
+                k = 4 * r + j
+                if k >= pixels:
+                    break
+                m = mascaras[k] >> (2 * c)
+                if m & 1:
+                    codigo |= _BRAILLE[j][0]
+                if m & 2:
+                    codigo |= _BRAILLE[j][1]
+            celulas.append(chr(0x2800 + codigo) if codigo else " ")
+        k0, k1 = 4 * r, min(pixels, 4 * r + 4) - 1
+        saida.append(("".join(celulas), inicio[k0], fim[k1]))
+    return saida
+
+
+def _cor_estilo(valor, fundo: bool = False) -> Optional[str]:
+    for t in (valor or "").split():
+        if fundo and t.startswith("bg:#"):
+            return t[3:]
+        if not fundo and t.startswith("#"):
+            return t
+    return None
+
+
+def estilo_mapa(base: dict) -> dict:
+    """Estilos do mapa derivados da paleta atual (jtheme ou embutida)."""
+    def fg(chave, padrao):
+        return _cor_estilo(base.get(chave)) or padrao
+
+    ponto = fg("pygments.comment", "#636da6")
+    return {
+        "minimap": ponto,
+        "minimap.def": fg("pygments.keyword", "#bb9af7"),
+        "minimap.cursor": fg("line-number.current", "#7aa2f7") + " bold",
+        "minimap.erro": fg("status.error", "#f7768e") + " bold",
+        "minimap.view": "bg:" + (_cor_estilo(base.get("header"), True) or _cor_estilo(base.get("status"), True) or "#292e42"),
+        "minimap.vazio": ponto + " italic",
+    }
+
+
 class ResultadoAnalise(NamedTuple):
     erro_sintaxe: Optional[Tuple[Optional[int], str]]  # (linha, mensagem)
     indice: List[str]                                   # identificadores ORDENADOS
     outline: List[Tuple[int, int, str]]
     desativada: bool
+    perfil: Optional[List[int]] = None                  # máscara por linha (mapa do arquivo)
 
 
 def analisar_documento(texto: str, extensao: str, palavras_base, cursor: Optional[int] = None) -> ResultadoAnalise:
@@ -600,6 +944,38 @@ class LexerAdaptativo(Lexer):
         return lex
 
 
+class DestaqueBuscaProcessor(Processor):
+    """Marca as ocorrências do termo buscado (e a atual, em destaque) sem mexer no texto."""
+
+    def __init__(self, estado):
+        self.estado = estado
+
+    def apply_transformation(self, transformation_input):
+        fragmentos = transformation_input.fragments
+        try:
+            rx = self.estado["rx"]
+            if not self.estado["ativa"] or rx is None:
+                return Transformation(fragmentos)
+            linha = "".join(f[1] for f in fragmentos)
+            achados = [(m.start(), m.end()) for m in rx.finditer(linha) if m.end() > m.start()]
+            if not achados:
+                return Transformation(fragmentos)
+            letras: StyleAndTextTuples = []
+            for f in fragmentos:
+                resto = tuple(f[2:])
+                letras.extend((f[0], c) + resto for c in f[1])
+            doc_linha = transformation_input.lineno
+            atual = self.estado["atual"]       # (linha, coluna) da ocorrência selecionada ou None
+            for a, b in achados:
+                classe = "class:busca.atual" if atual == (doc_linha, a) else "class:busca"
+                for i in range(a, min(b, len(letras))):
+                    f = letras[i]
+                    letras[i] = (f"{f[0]} {classe}".strip(), f[1]) + tuple(f[2:])
+            return Transformation(letras)
+        except Exception:
+            return Transformation(fragmentos)
+
+
 class IndentGuideProcessor(Processor):
     """Troca os espaços de indentação por guias visuais, preservando o estilo do resto da linha."""
 
@@ -681,9 +1057,10 @@ def editar(arg_caminho: str) -> None:
     palavras_linguagem = set(PALAVRAS_POR_EXTENSAO.get(extensao, PALAVRAS_CHAVE_PYTHON))
 
     # ── Estado ────────────────────────────────────────────────────────────────
-    analise = {"indice": sorted(palavras_linguagem), "erro": None, "desativada": False}
+    analise = {"indice": sorted(palavras_linguagem), "erro": None, "desativada": False, "perfil": None}
     inicial = analisar_documento(texto, extensao, palavras_linguagem, 0)
-    analise.update(indice=inicial.indice, erro=inicial.erro_sintaxe, desativada=inicial.desativada)
+    analise.update(indice=inicial.indice, erro=inicial.erro_sintaxe, desativada=inicial.desativada,
+                   perfil=inicial.perfil)
 
     texto_salvo = [texto]
     salvamento = {
@@ -696,10 +1073,14 @@ def editar(arg_caminho: str) -> None:
 
     selecao_linha = {"ativa": False, "inicio": 0, "fim": 0}
     modo_explorar = {"ativo": False, "posicao": 0}
-    modo_comando = {"ativo": False, "texto": "", "erro": ""}
+    modo_comando = {"ativo": False, "texto": "", "erro": "", "tipo": "linha"}   # tipo: "linha" (Ctrl+G) ou "busca" (Ctrl+F)
+    busca = {"ativa": False, "rx": None, "posicoes": [], "indice": -1, "origem": 0, "ultimo": "", "atual": None}
     alteracao_bloco = [False]
 
     outline = {"visivel": False, "foco": False, "itens": [], "indice": 0}
+    quebra = {"ativa": True}
+    auto = {"ativo": extensao not in EXT_SEM_AUTO_FECHAR}
+    csi = {"ativo": False, "ate": 0.0}     # descarta restos de sequências de tecla desconhecidas
 
     buffer = Buffer(
         complete_while_typing=True,
@@ -727,6 +1108,8 @@ def editar(arg_caminho: str) -> None:
     cond_normal = Condition(lambda: cond_editor() and not selecao_linha["ativa"] and not modo_explorar["ativo"])
     cond_tem_selecao = Condition(lambda: buffer.selection_state is not None)
     cond_selecao_linha = Condition(lambda: selecao_linha["ativa"])
+    cond_auto = Condition(lambda: cond_normal() and auto["ativo"] and buffer.selection_state is None)
+    cond_csi = Condition(lambda: csi["ativo"] and time.monotonic() < csi["ate"])
 
     def atalho(*keys, filter=None, eager=False):
         """Registra um atalho; qualquer exceção vira aviso na barra + log, nunca derruba o editor."""
@@ -759,14 +1142,14 @@ def editar(arg_caminho: str) -> None:
     def linhas_por_pagina() -> int:
         return max(1, altura_janela(editor, 12) - 1)
 
-    def centralizar_linha(row: int) -> None:
-        """Se a linha-alvo está fora da tela, rola para deixá-la no meio (mais contexto ao pular)."""
+    def centralizar_linha(row: int, forcar: bool = False) -> None:
+        """Se a linha-alvo está fora da tela (ou `forcar`), rola para deixá-la no meio."""
         try:
             altura = altura_janela(editor, 0)
             if altura <= 0:
                 return
             topo = editor.vertical_scroll
-            if row < topo or row >= topo + altura:
+            if forcar or row < topo or row >= topo + altura:
                 editor.vertical_scroll = max(0, row - altura // 2)
         except Exception:
             pass
@@ -839,6 +1222,8 @@ def editar(arg_caminho: str) -> None:
             aplicar_indentacao(buf, remover=False)
         elif buf.complete_state and buf.complete_state.current_completion:
             buf.apply_completion(buf.complete_state.current_completion)
+        elif tab_ignorar(buf.document.current_line, buf.document.cursor_position_col):
+            avisar("Tab ignorado no fim da linha", 1.5)   # quase sempre foi sem querer
         else:
             buf.insert_text(INDENT)
 
@@ -873,6 +1258,14 @@ def editar(arg_caminho: str) -> None:
     def enter_editor(event):
         buf = event.current_buffer
         doc = buf.document
+        col = doc.cursor_position_col
+        if auto["ativo"] and (doc.current_line[col - 1:col], doc.current_line[col:col + 1]) in (("(", ")"), ("[", "]"), ("{", "}")):
+            # Enter entre um par vazio: abre o bloco com o fechamento embaixo
+            base = _indentacao_inicial(doc.current_line[:col])
+            fundo = base + ("\t" if "\t" in base else INDENT)
+            buf.insert_text("\n" + fundo + "\n" + base)
+            buf.cursor_position -= len(base) + 1
+            return
         if extensao == ".py":
             indent = calcular_indentacao_enter(doc.current_line, doc.cursor_position_col)
         else:
@@ -910,6 +1303,18 @@ def editar(arg_caminho: str) -> None:
             confirmar["sobrescrita"] = True
             avisar("O arquivo mudou no disco! Ctrl+S de novo para sobrescrever.", 6.0)
             return
+
+        if extensao not in EXT_SEM_LIMPEZA:
+            doc = buffer.document
+            row, col = doc.cursor_position_row, doc.cursor_position_col
+            limpo, mudadas = limpar_espacos_finais(buffer.text, row, col)
+            if mudadas:
+                selecao_linha["ativa"] = False
+                buffer.exit_selection()
+                buffer.save_to_undo_stack()      # Ctrl+Z desfaz a limpeza
+                buffer.text = limpo
+                buffer.cursor_position = buffer.document.translate_row_col_to_index(row, col)
+                avisar(f"Espaços finais removidos em {mudadas} linha(s)")
 
         texto_atual = buffer.text
         try:
@@ -1081,10 +1486,17 @@ def editar(arg_caminho: str) -> None:
     # ── Ir para linha (Ctrl+G) ────────────────────────────────────────────────
     @atalho("c-g", filter=cond_normal)
     def abrir_ir_linha(event):
-        modo_comando.update(ativo=True, texto="", erro="")
+        modo_comando.update(ativo=True, texto="", erro="", tipo="linha")
 
     @atalho("enter", filter=cond_comando, eager=True)
     def confirmar_comando(event):
+        if modo_comando["tipo"] == "busca":
+            if not modo_comando["texto"] and busca["ultimo"]:     # Enter sem digitar: repete a última busca
+                modo_comando["texto"] = busca["ultimo"]
+                atualizar_busca()
+            else:
+                ir_ocorrencia(1, depois_do_cursor=True)
+            return
         try:
             doc = buffer.document
             row, col = interpretar_ir_linha(modo_comando["texto"], doc.cursor_position_row + 1, len(doc.lines))
@@ -1096,20 +1508,124 @@ def editar(arg_caminho: str) -> None:
 
     @atalho("escape", filter=cond_comando, eager=True)
     def cancelar_comando(event):
+        if modo_comando["tipo"] == "busca":
+            fechar_busca()
+            return
         modo_comando.update(ativo=False, texto="", erro="")
 
     @atalho("backspace", filter=cond_comando, eager=True)
     def apagar_comando(event):
         modo_comando["texto"] = modo_comando["texto"][:-1]
+        if modo_comando["tipo"] == "busca":
+            atualizar_busca()
 
     @atalho("c-u", filter=cond_comando, eager=True)
     def limpar_comando(event):
         modo_comando["texto"] = ""
+        if modo_comando["tipo"] == "busca":
+            atualizar_busca()
 
     @atalho(Keys.Any, filter=cond_comando)
     def digitar_comando(event):
-        if event.data.isprintable() and len(modo_comando["texto"]) < 32:
+        if event.data.isprintable() and len(modo_comando["texto"]) < (200 if modo_comando["tipo"] == "busca" else 32):
             modo_comando["texto"] += event.data
+            if modo_comando["tipo"] == "busca":
+                atualizar_busca()
+
+    # ── Buscar (Ctrl+F) ───────────────────────────────────────────────────────
+    # Digitou, já pula para a primeira ocorrência a partir de onde estava. Enter/↓/Ctrl+F: próxima;
+    # ↑/Ctrl+P: anterior; Esc: fecha e o cursor fica na ocorrência. Ctrl+G continua sendo "ir para linha".
+    def posicao_da_ocorrencia(pos: int) -> Tuple[int, int]:
+        doc = buffer.document
+        return doc.translate_index_to_position(pos)
+
+    def atualizar_busca(manter: bool = False) -> None:
+        termo = modo_comando["texto"]
+        busca["rx"] = compilar_busca(termo)
+        busca["ativa"] = bool(termo)
+        busca["posicoes"] = buscar_ocorrencias(buffer.text, termo)
+        busca["atual"] = None
+        busca["indice"] = -1
+        modo_comando["erro"] = ""
+        if not busca["posicoes"]:
+            if termo:
+                modo_comando["erro"] = "sem resultados"
+            return
+        ir_ocorrencia(1, partir_de=busca["origem"] if not manter else buffer.cursor_position)
+
+    def ir_ocorrencia(sentido: int, depois_do_cursor: bool = False, partir_de: Optional[int] = None) -> None:
+        if not busca["posicoes"]:
+            return
+        if partir_de is None:
+            partir_de = buffer.cursor_position
+            if sentido >= 0 and depois_do_cursor and busca["indice"] >= 0:
+                partir_de += 1                     # já estou numa ocorrência: vai para a seguinte
+        i = escolher_ocorrencia(busca["posicoes"], partir_de, sentido)
+        if i < 0:
+            return
+        busca["indice"] = i
+        pos = busca["posicoes"][i]
+        linha, coluna = posicao_da_ocorrencia(pos)
+        busca["atual"] = (linha, coluna)
+        buffer.cursor_position = pos
+        centralizar_linha(linha)
+        app.invalidate()
+
+    def fechar_busca() -> None:
+        if modo_comando["texto"]:
+            busca["ultimo"] = modo_comando["texto"]
+        modo_comando.update(ativo=False, texto="", erro="", tipo="linha")
+        busca.update(ativa=False, rx=None, posicoes=[], indice=-1, atual=None)
+
+    @atalho("c-f", filter=cond_normal)
+    def abrir_busca(event):
+        busca["origem"] = buffer.cursor_position
+        modo_comando.update(ativo=True, texto="", erro="", tipo="busca")
+        busca.update(ativa=False, rx=None, posicoes=[], indice=-1, atual=None)
+        if busca["ultimo"]:
+            avisar("Enter repete a última busca: " + busca["ultimo"], 3.0)
+
+    cond_busca = Condition(lambda: modo_comando["ativo"] and modo_comando["tipo"] == "busca")
+
+    @atalho("c-f", filter=cond_busca, eager=True)
+    @atalho("down", filter=cond_busca, eager=True)
+    def busca_proxima(event):
+        ir_ocorrencia(1, depois_do_cursor=True)
+
+    @atalho("c-p", filter=cond_busca, eager=True)
+    @atalho("up", filter=cond_busca, eager=True)
+    def busca_anterior(event):
+        ir_ocorrencia(-1)
+
+    # ── Rolar a tela sem mover o texto (Ctrl+↓ / Ctrl+↑) ──────────────────────
+    # Ctrl+↓ sobe o código na tela, inclusive no fim do arquivo (dá para ler as últimas linhas
+    # no meio da tela, sem criar linhas vazias). O cursor acompanha só o necessário para não sumir.
+    def rolar_vista(n: int) -> None:
+        doc = buffer.document
+        total = len(doc.lines)
+        linha = doc.cursor_position_row
+        altura = altura_janela(editor, 12)
+        topo = max(0, min(editor.vertical_scroll + n, total - 1))
+        if linha < topo:
+            buffer.cursor_down(count=topo - linha)
+        elif linha > topo + altura - 1:
+            buffer.cursor_up(count=linha - (topo + altura - 1))
+        editor.vertical_scroll = topo
+        app.invalidate()
+
+    @atalho("c-down", filter=cond_normal | cond_explorar)
+    def rolar_para_baixo(event):
+        rolar_vista(PASSO_ROLAGEM)
+
+    @atalho("c-up", filter=cond_normal | cond_explorar)
+    def rolar_para_cima(event):
+        rolar_vista(-PASSO_ROLAGEM)
+
+    # ── Quebra de linha (F3) ──────────────────────────────────────────────────
+    @atalho("f3", filter=cond_atalho_global)
+    def alternar_quebra(event):
+        quebra["ativa"] = not quebra["ativa"]
+        avisar("Quebra de linha: " + ("ligada" if quebra["ativa"] else "desligada"), 2.0)
 
     # ── Sumário (Ctrl+O) ──────────────────────────────────────────────────────
     def obter_texto_outline():
@@ -1193,6 +1709,57 @@ def editar(arg_caminho: str) -> None:
     def outline_fechar(event):
         fechar_outline()
 
+    # ── Auto-fechar pares, backspace em par vazio, digitação segura ───────────
+    def registrar_auto(c: str) -> None:
+        @atalho(c, filter=cond_auto)
+        def _auto(event):
+            buf = event.current_buffer
+            pos = buf.cursor_position
+            acao, texto, recuo = decidir_auto_fechar(c, buf.text[max(0, pos - 4000):pos], buf.text[pos:pos + 3])
+            if acao == "pular":
+                buf.cursor_position = pos + 1
+            else:
+                buf.insert_text(texto)
+                if recuo:
+                    buf.cursor_position -= recuo
+
+    for _c in "([{)]}\"'":
+        registrar_auto(_c)
+
+    @atalho("backspace", filter=cond_auto)
+    def apagar_par_vazio(event):
+        buf = event.current_buffer
+        pos = buf.cursor_position
+        if pos > 0 and par_vazio(buf.text[pos - 1:pos], buf.text[pos:pos + 1]):
+            buf.delete_before_cursor(1)
+            buf.delete(1)
+        else:
+            buf.delete_before_cursor(count=event.arg)
+
+    @atalho("f4", filter=cond_atalho_global)
+    def alternar_auto_fechar(event):
+        auto["ativo"] = not auto["ativo"]
+        avisar("Auto-fechar: " + ("ligado" if auto["ativo"] else "desligado"), 2.0)
+
+    # Só texto de verdade entra no buffer: teclas combinadas sem ação (Ctrl+PageUp...) não viram "^[[5;5~".
+    @atalho(Keys.Any, filter=cond_editor)
+    def inserir_texto(event):
+        dados = event.data
+        if dados and dados.isprintable():
+            event.current_buffer.insert_text(dados * event.arg)
+
+    # Resto de sequência de tecla que nenhuma camada reconheceu (ESC [ 5 ; 5 ~): descarta até o fim dela.
+    @atalho("escape", "[", filter=cond_atalho_global, eager=True)
+    def iniciar_descarte_csi(event):
+        csi.update(ativo=True, ate=time.monotonic() + 0.25)
+
+    @atalho(Keys.Any, filter=cond_csi, eager=True)
+    def descartar_csi(event):
+        dados = event.data or ""
+        csi["ate"] = time.monotonic() + 0.25
+        if len(dados) == 1 and "@" <= dados <= "~":   # byte final da sequência
+            csi["ativo"] = False
+
     # ── Layout ────────────────────────────────────────────────────────────────
     try:
         lexer_inst = get_lexer_for_filename(caminho.name)
@@ -1203,13 +1770,26 @@ def editar(arg_caminho: str) -> None:
     controle = BufferControl(
         buffer=buffer,
         lexer=lexer,
-        input_processors=[IndentGuideProcessor()],
+        input_processors=[DestaqueBuscaProcessor(busca), IndentGuideProcessor()],
     )
+
+    def prefixo_continuacao(numero_linha: int, quebras: int):
+        """Linhas quebradas pela largura da tela recebem a indentação da linha de origem e um marcador."""
+        if quebras == 0:
+            return ""
+        try:
+            linha = buffer.document.lines[numero_linha]
+        except IndexError:
+            return ""
+        recuo = min(len(linha) - len(linha.lstrip(" \t")), 24)
+        return [("class:indent-guide", " " * recuo + "› ")]
 
     editor = Window(
         content=controle,
-        wrap_lines=False,
+        wrap_lines=Condition(lambda: quebra["ativa"]),
         left_margins=[CustomNumberedMargin(separator="│")],
+        get_line_prefix=prefixo_continuacao,
+        allow_scroll_beyond_bottom=True,
     )
 
     janela_outline = Window(
@@ -1223,59 +1803,66 @@ def editar(arg_caminho: str) -> None:
         style="class:outline",
     )
 
+    ramo_cache = {"valor": None, "t": -999.0}
+
+    def ramo_atual() -> Optional[str]:
+        """Ramo do git lendo .git/HEAD; refeito a cada 5 s (nunca a cada tecla)."""
+        agora = time.monotonic()
+        if jstatus is not None and agora - ramo_cache["t"] > 5.0:
+            ramo_cache.update(valor=jstatus.ramo_git(caminho), t=agora)
+        return ramo_cache["valor"]
+
     def texto_status():
-        modificado = buffer.text != texto_salvo[0]
+        if jstatus is None:
+            return [("class:status", f" {caminho.name}")]
         doc = buffer.document
-        posicao = f"{doc.cursor_position_row + 1}:{doc.cursor_position_col + 1}"
-
-        if modo_comando["ativo"]:
-            modo = "[IR] " + modo_comando["texto"] + "_"
+        modo = modo_texto = None
+        if modo_comando["ativo"] and modo_comando["tipo"] == "busca":
+            n = len(busca["posicoes"])
+            modo = "busca"
+            modo_texto = modo_comando["texto"] + (f" {busca['indice'] + 1}/{n}" if n else (" sem resultados" if modo_comando["texto"] else ""))
+        elif modo_comando["ativo"]:
+            modo, modo_texto = "ir", modo_comando["texto"] + (f"  {modo_comando['erro']}" if modo_comando["erro"] else "")
         elif modo_explorar["ativo"]:
-            modo = "[EXP]"
+            modo = "exp"
         elif selecao_linha["ativa"]:
-            modo = "[SEL]"
-        else:
-            modo = ""
+            modo = "sel"
 
-        if modificado:
-            estado_curto = "● MOD"
-        elif salvamento["ok"]:
-            estado_curto = "✓ SALVO"
-        else:
-            estado_curto = "! ERRO"
-
-        base = f" {caminho.name}  │  {estado_curto}  │  {posicao}"
-        if modo:
-            base += f"  │  {modo}"
-        detalhes_formato = []
+        flags = []
+        if not quebra["ativa"]:
+            flags.append("sem quebra")
         if formato["fim_linha"] != "\n":
-            detalhes_formato.append({"\r\n": "CRLF", "\r": "CR"}.get(formato["fim_linha"], "?"))
+            flags.append({"\r\n": "CRLF", "\r": "CR"}.get(formato["fim_linha"], "?"))
         if formato["encoding"] != "utf-8":
-            detalhes_formato.append(formato["encoding"])
-        if detalhes_formato:
-            base += "  │  " + " ".join(detalhes_formato)
+            flags.append(formato["encoding"])
 
-        extras = []
-        if not salvamento["ok"] and salvamento["erro"]:
-            extras.append(salvamento["erro"])
-        if modo_comando["ativo"] and modo_comando["erro"]:
-            extras.append(modo_comando["erro"])
+        mensagens = []
         if mensagem["texto"] and time.monotonic() < mensagem["expira"]:
-            extras.append(mensagem["texto"])
+            mensagens.append(mensagem["texto"])
         if analise["desativada"]:
-            extras.append("análise desativada (arquivo grande)")
-        extra = "".join("  ·  " + e for e in extras)
-
-        erro = analise["erro"]
-        if extensao == ".py" and erro is not None:
-            linha_erro = erro[0] if erro[0] is not None else "?"
-            return [("class:status.error", f"{base}  │  Sintaxe L{linha_erro}: {erro[1]}{extra}")]
-        return [("class:status", base + extra)]
+            mensagens.append("análise desativada (arquivo grande)")
+        erro = analise["erro"] if extensao == ".py" else None
+        try:
+            largura = app.output.get_size().columns
+        except Exception:
+            largura = 80
+        estado = {
+            "nome": caminho.name, "modificado": buffer.text != texto_salvo[0], "salvo_ok": salvamento["ok"],
+            "erro_salvar": None if salvamento["ok"] else (salvamento["erro"] or "erro ao salvar"),
+            "modo": modo, "modo_texto": modo_texto or "", "linha": doc.cursor_position_row,
+            "coluna": doc.cursor_position_col, "total": len(doc.lines), "ramo": ramo_atual(),
+            "flags": flags, "erro_sintaxe": erro, "mensagens": mensagens,
+        }
+        try:
+            return jstatus.montar_status(estado, largura, NERD)
+        except Exception as exc:     # a barra é enfeite: se falhar, não derruba o editor
+            registrar_erro(exc)
+            return [("class:status", f" {caminho.name}")]
 
     status = Window(
         content=FormattedTextControl(text=texto_status),
         height=1,
-        style="class:status",
+        style="class:st.bar",
     )
 
     corpo = VSplit([
@@ -1303,7 +1890,9 @@ def editar(arg_caminho: str) -> None:
         ],
     )
 
-    estilo = Style.from_dict(_ESTILO)   # tema: jtheme.py se existir; senão o embutido
+    # tema: jtheme.py se existir; senão o embutido
+    estilo = Style.from_dict({"busca": "reverse", "busca.atual": "bg:#e0af68 #1a1b26 bold",
+                              **(jstatus.estilos_status(jtheme) if jstatus else {}), **_ESTILO})
 
     app = Application(
         layout=Layout(layout_completions, focused_element=editor),
@@ -1348,7 +1937,7 @@ def editar(arg_caminho: str) -> None:
     estado_analise = {"em_andamento": False, "pendente": False}
 
     def aplicar_resultado(res: ResultadoAnalise) -> None:
-        analise.update(indice=res.indice, erro=res.erro_sintaxe, desativada=res.desativada)
+        analise.update(indice=res.indice, erro=res.erro_sintaxe, desativada=res.desativada, perfil=res.perfil)
         if extensao == ".py":
             outline["itens"] = res.outline
             if outline["itens"]:
@@ -1426,8 +2015,8 @@ def editar(arg_caminho: str) -> None:
 
     tty = sys.stdout.isatty()
     try:
-        if tty:
-            sys.stdout.write("\033[1 q")
+        if tty and jcursor is not None:
+            sys.stdout.write(jcursor.sequencia(jcursor.carregar()))
             sys.stdout.flush()
         app.run(pre_run=iniciar_vigia)
     except Exception as exc:
@@ -1444,8 +2033,8 @@ def editar(arg_caminho: str) -> None:
         if timer_analise[0] is not None:
             timer_analise[0].cancel()
         executor_analise.shutdown(wait=False, cancel_futures=True)
-        if tty:
-            sys.stdout.write("\033[6 q")
+        if tty and jcursor is not None:
+            sys.stdout.write("\033[0 q")    # devolve o cursor ao padrão do terminal
             sys.stdout.flush()
 
 
@@ -1511,14 +2100,46 @@ def tela_idle(ultimo: Optional[str]) -> Optional[str]:
     return app_idle.run(pre_run=pre_run)
 
 
+AJUDA = """Uso:
+  jcode <arquivo>          abre o editor
+  jcode -map <arquivo>     mostra no terminal o mapa da estrutura do arquivo (sem abrir o editor)
+  jcode -setup             menu de configuração (formato do cursor e piscar)
+  jcode -h                 esta ajuda
+"""
+
+
+def comando_map(arquivo: str) -> int:
+    caminho = Path(arquivo).expanduser()
+    try:
+        texto = caminho.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        print(f"jcode -map: não consegui ler {arquivo}: {exc.strerror or exc}", file=sys.stderr)
+        return 1
+    tam = shutil.get_terminal_size((100, 30))
+    print(mapa_em_texto(texto, caminho.suffix.lower(), caminho.name, tam.columns, tam.lines,
+                        cor=sys.stdout.isatty()), end="")
+    return 0
+
+
 def main() -> None:
     args = sys.argv[1:]
+    if args and args[0] in ("-h", "--help", "-help"):
+        print(AJUDA, end="")
+        return
+    if args and args[0] in ("-setup", "--setup"):
+        sys.exit(0 if executar_setup() else 1)
+    if args and args[0] in ("-map", "--map"):
+        if len(args) < 2:
+            print("Uso: jcode -map <arquivo>", file=sys.stderr)
+            sys.exit(2)
+        sys.exit(comando_map(args[1]))
+    ignorar_sequencias_modificadas()
     # Só o painel "jcode" do JDesk vira um editor residente (idle + recebe pedidos).
     # Um JCode aberto pelo JShell/JFiles dentro do JDesk continua efêmero, como sempre.
     residente = jipc is not None and jipc.disponivel() and os.environ.get("JDESK_PANE") == "jcode"
 
     if not args and not residente:
-        print("Uso: python JCode.py <arquivo>")
+        print(AJUDA, end="")
         return
 
     receptor = None

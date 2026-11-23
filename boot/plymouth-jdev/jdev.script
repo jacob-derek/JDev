@@ -1,0 +1,211 @@
+# Todas as letras, formas e quadros sao PNGs gerados previamente.
+Window.SetBackgroundTopColor(0.051, 0.067, 0.082);
+Window.SetBackgroundBottomColor(0.051, 0.067, 0.082);
+
+title.image = Image("titulo.png");
+title.sprite = Sprite(title.image);
+title.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - title.image.GetWidth() / 2,
+                         Window.GetY() + 110, 10);
+
+divider.image = Image("divisoria.png");
+divider.sprite = Sprite(divider.image);
+divider.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - divider.image.GetWidth() / 2,
+                           Window.GetY() + 140, 1);
+
+logo.image = Image("void-logo.png");
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - 250,
+                        Window.GetY() + 205, 2);
+
+system.image = Image("sistema.png");
+system.sprite = Sprite(system.image);
+system.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - 115,
+                          Window.GetY() + 218, 3);
+
+label.image[0] = Image("dado-0-label.png");
+value.image[0] = Image("dado-0-valor.png");
+label.image[1] = Image("dado-1-label.png");
+value.image[1] = Image("dado-1-valor.png");
+label.image[2] = Image("dado-2-label.png");
+value.image[2] = Image("dado-2-valor.png");
+label.image[3] = Image("dado-3-label.png");
+value.image[3] = Image("dado-3-valor.png");
+for (i = 0; i < 4; i++)
+  {
+    label.sprite[i] = Sprite(label.image[i]);
+    label.sprite[i].SetPosition(Window.GetX() + Window.GetWidth() / 2 - 115,
+                                Window.GetY() + 258 + i * 43, 3);
+    value.sprite[i] = Sprite(value.image[i]);
+    value.sprite[i].SetPosition(Window.GetX() + Window.GetWidth() / 2 - 115,
+                                Window.GetY() + 275 + i * 43, 3);
+  }
+
+track.image = Image("progresso-trilho.png");
+track.sprite = Sprite(track.image);
+track.x = Window.GetX() + Window.GetWidth() / 2 - track.image.GetWidth() / 2;
+track.y = Window.GetY() + 535;
+track.sprite.SetPosition(track.x, track.y, 4);
+
+progress.images[0] = Image("progresso-0.png");
+progress.images[1] = Image("progresso-1.png");
+progress.images[2] = Image("progresso-2.png");
+progress.images[3] = Image("progresso-3.png");
+progress.images[4] = Image("progresso-4.png");
+progress.images[5] = Image("progresso-5.png");
+progress.images[6] = Image("progresso-6.png");
+progress.images[7] = Image("progresso-7.png");
+progress.images[8] = Image("progresso-8.png");
+progress.images[9] = Image("progresso-9.png");
+progress.images[10] = Image("progresso-10.png");
+progress.images[11] = Image("progresso-11.png");
+progress.images[12] = Image("progresso-12.png");
+progress.images[13] = Image("progresso-13.png");
+progress.images[14] = Image("progresso-14.png");
+progress.images[15] = Image("progresso-15.png");
+progress.images[16] = Image("progresso-16.png");
+progress.images[17] = Image("progresso-17.png");
+progress.images[18] = Image("progresso-18.png");
+progress.images[19] = Image("progresso-19.png");
+progress.images[20] = Image("progresso-20.png");
+progress.images[21] = Image("progresso-21.png");
+progress.images[22] = Image("progresso-22.png");
+progress.images[23] = Image("progresso-23.png");
+progress.images[24] = Image("progresso-24.png");
+progress.images[25] = Image("progresso-25.png");
+progress.images[26] = Image("progresso-26.png");
+progress.images[27] = Image("progresso-27.png");
+progress.images[28] = Image("progresso-28.png");
+progress.images[29] = Image("progresso-29.png");
+progress.images[30] = Image("progresso-30.png");
+progress.images[31] = Image("progresso-31.png");
+progress.images[32] = Image("progresso-32.png");
+progress.images[33] = Image("progresso-33.png");
+progress.images[34] = Image("progresso-34.png");
+progress.images[35] = Image("progresso-35.png");
+progress.images[36] = Image("progresso-36.png");
+progress.images[37] = Image("progresso-37.png");
+progress.images[38] = Image("progresso-38.png");
+progress.images[39] = Image("progresso-39.png");
+progress.images[40] = Image("progresso-40.png");
+progress.images[41] = Image("progresso-41.png");
+progress.images[42] = Image("progresso-42.png");
+progress.images[43] = Image("progresso-43.png");
+progress.images[44] = Image("progresso-44.png");
+progress.images[45] = Image("progresso-45.png");
+progress.images[46] = Image("progresso-46.png");
+progress.images[47] = Image("progresso-47.png");
+progress.images[48] = Image("progresso-48.png");
+progress.images[49] = Image("progresso-49.png");
+progress.images[50] = Image("progresso-50.png");
+progress.images[51] = Image("progresso-51.png");
+progress.images[52] = Image("progresso-52.png");
+progress.images[53] = Image("progresso-53.png");
+progress.images[54] = Image("progresso-54.png");
+progress.images[55] = Image("progresso-55.png");
+progress.images[56] = Image("progresso-56.png");
+progress.images[57] = Image("progresso-57.png");
+progress.images[58] = Image("progresso-58.png");
+progress.images[59] = Image("progresso-59.png");
+progress.images[60] = Image("progresso-60.png");
+progress.images[61] = Image("progresso-61.png");
+progress.images[62] = Image("progresso-62.png");
+progress.images[63] = Image("progresso-63.png");
+progress.images[64] = Image("progresso-64.png");
+progress.images[65] = Image("progresso-65.png");
+progress.images[66] = Image("progresso-66.png");
+progress.images[67] = Image("progresso-67.png");
+progress.images[68] = Image("progresso-68.png");
+progress.images[69] = Image("progresso-69.png");
+progress.images[70] = Image("progresso-70.png");
+progress.images[71] = Image("progresso-71.png");
+progress.images[72] = Image("progresso-72.png");
+progress.images[73] = Image("progresso-73.png");
+progress.images[74] = Image("progresso-74.png");
+progress.images[75] = Image("progresso-75.png");
+progress.images[76] = Image("progresso-76.png");
+progress.images[77] = Image("progresso-77.png");
+progress.images[78] = Image("progresso-78.png");
+progress.images[79] = Image("progresso-79.png");
+progress.images[80] = Image("progresso-80.png");
+progress.images[81] = Image("progresso-81.png");
+progress.images[82] = Image("progresso-82.png");
+progress.images[83] = Image("progresso-83.png");
+progress.images[84] = Image("progresso-84.png");
+progress.images[85] = Image("progresso-85.png");
+progress.images[86] = Image("progresso-86.png");
+progress.images[87] = Image("progresso-87.png");
+progress.images[88] = Image("progresso-88.png");
+progress.images[89] = Image("progresso-89.png");
+progress.images[90] = Image("progresso-90.png");
+progress.images[91] = Image("progresso-91.png");
+progress.images[92] = Image("progresso-92.png");
+progress.images[93] = Image("progresso-93.png");
+progress.images[94] = Image("progresso-94.png");
+progress.images[95] = Image("progresso-95.png");
+progress.images[96] = Image("progresso-96.png");
+progress.images[97] = Image("progresso-97.png");
+progress.images[98] = Image("progresso-98.png");
+progress.images[99] = Image("progresso-99.png");
+progress.images[100] = Image("progresso-100.png");
+progress.sprite = Sprite(progress.images[0]);
+progress.sprite.SetPosition(track.x, track.y, 5);
+
+indicator.images[0] = Image("indicador-0.png");
+indicator.images[1] = Image("indicador-1.png");
+indicator.images[2] = Image("indicador-2.png");
+indicator.images[3] = Image("indicador-3.png");
+indicator.images[4] = Image("indicador-4.png");
+indicator.images[5] = Image("indicador-5.png");
+indicator.images[6] = Image("indicador-6.png");
+indicator.images[7] = Image("indicador-7.png");
+indicator.images[8] = Image("indicador-8.png");
+indicator.images[9] = Image("indicador-9.png");
+indicator.images[10] = Image("indicador-10.png");
+indicator.images[11] = Image("indicador-11.png");
+indicator.images[12] = Image("indicador-12.png");
+indicator.images[13] = Image("indicador-13.png");
+indicator.images[14] = Image("indicador-14.png");
+indicator.images[15] = Image("indicador-15.png");
+indicator.images[16] = Image("indicador-16.png");
+indicator.images[17] = Image("indicador-17.png");
+indicator.images[18] = Image("indicador-18.png");
+indicator.images[19] = Image("indicador-19.png");
+indicator.frame = 0;
+indicator.sprite = Sprite(indicator.images[0]);
+indicator.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - 220,
+                             Window.GetY() + 603, 6);
+
+footer.images[0] = Image("rodape-0.png");
+footer.images[1] = Image("rodape-1.png");
+footer.images[2] = Image("rodape-2.png");
+footer.images[3] = Image("rodape-3.png");
+footer.frame = 0;
+footer.sprite = Sprite(footer.images[0]);
+footer.sprite.SetPosition(Window.GetX() + Window.GetWidth() / 2 - 90,
+                          Window.GetY() + Window.GetHeight() - 66, 6);
+
+fun progress_callback (duration, fraction)
+  {
+    percent = Math.Int(fraction * 100);
+    if (percent < 0)
+      {
+        percent = 0;
+      }
+    if (percent > 100)
+      {
+        percent = 100;
+      }
+    progress.sprite.SetImage(progress.images[percent]);
+  }
+
+Plymouth.SetBootProgressFunction(progress_callback);
+
+fun refresh_callback ()
+  {
+    indicator.frame = (indicator.frame + 1) % 20;
+    indicator.sprite.SetImage(indicator.images[indicator.frame]);
+    footer.frame = (footer.frame + 1) % 4;
+    footer.sprite.SetImage(footer.images[footer.frame]);
+  }
+
+Plymouth.SetRefreshFunction(refresh_callback);

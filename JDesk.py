@@ -519,7 +519,18 @@ class JDesk:
 def main():
     enable_dpi_awareness()
     root = tk.Tk()
-    JDesk(root)
+    desk = JDesk(root)
+    # A tela de abertura espera até que a interface inicial tenha sido montada e
+    # Tk tenha processado o primeiro desenho (incluindo os painéis do workspace 1).
+    def sinalizar_pronto():
+        try:
+            from jbirds import PRONTO
+            os.makedirs(os.path.dirname(PRONTO), exist_ok=True)
+            with open(PRONTO, "w", encoding="utf-8") as pronto:
+                pronto.write("JDesk pronto\n")
+        except OSError:
+            pass  # a decoração não pode impedir o JDesk de abrir
+    root.after_idle(sinalizar_pronto)
     root.mainloop()
 
 

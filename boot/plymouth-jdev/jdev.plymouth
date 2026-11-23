@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=JDev Standby
+Description=Tema escuro JDev inspirado no JStandby
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/jdev/assets
+ScriptFile=/usr/share/plymouth/themes/jdev/jdev.script

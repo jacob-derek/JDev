@@ -1,24 +1,5 @@
-# Changelog
-
-Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e versionamento
-semântico (`MAJOR.MINOR.PATCH`).
-
-## [1.0.0] - 2026-11-07
-
-Primeira versão oficial: estável, bonita e leve.
-
-### Adicionado
-- **JWM**: mosaico em árvore estilo Sway (`jtile.py`), com divisões horizontais e verticais,
-  troca de janelas de lugar por direção e redimensionamento pela divisória, incluindo o modo
-  resize (`Super+R`).
-- **JWM**: borda colorida na janela focada, atalhos `Super+B`/`Super+V`/`Super+T` para controlar
-  a divisão e `--no-ui` (apelido de `--no-jdesk`) para subir só o gerenciador de janelas.
-- **JBar**: barra em pílulas no rodapé, em faixa reservada, que o JWM publica em
-  `~/.cache/jwm-state.json` (modo, divisão pendente, título); `Super+Shift+B` mostra e esconde.
-- **Temas** (`jtheme.py`): Tokyo Night, Catppuccin Mocha, Gruvbox Dark, Dawn (claro) e Ashes. O tema vale para
-  JWM, JBar, JDesk, JTerm, JCode, JFiles, JShell e JRun, e o `jtheme.py` é opcional: sem ele
-  cada programa usa o Tokyo Night embutido.
-- **Wallpaper por monitor** (`jwm-layout`): `horizontal.*` e `vertical.*` em `~/.config/jdev/`,
-  escolhidos pela orientação real de cada monitor.
-- Testes (`tests/`), CI no GitHub Actions e o script `scripts/xephyr-test.sh` para testar o JWM
-  num X aninhado, sem arriscar a sessão.
+## Gato pixel na JBar
+- Skin "gatinha" (padrão): tortoiseshell filhote — cinza-escuro com manchas caramelo, marrom e bege, peito branco, sobrancelhas claras, olhos âmbar, patinha da frente bege. `JGATO_SKIN=cinza` volta ao gato cinza.
+- jcat.py: gato desenhado em código (sprites 16x12 em texto). Senta, anda de um lado a outro do espaço vazio da barra, dorme com zzz; com música tocando não dorme e balança; clique nele = carinho (coração).
+- JBar: o gato passeia no maior espaço livre (antes ou depois do relógio) e some se não couber. `JGATO=0` desliga. Sem jcat.py a barra é igual a antes.
+- tests: test_jcat (sprites, limites, estados) e test_jbar_gato (integração com tkinter de mentira).

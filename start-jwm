@@ -21,8 +21,18 @@ if ! python3 -c 'import Xlib' >/dev/null 2>&1; then
     exit 1
 fi
 
-DISPLAY_ID=:0
-if [ -S /tmp/.X11-unix/X0 ]; then
-    DISPLAY_ID=:1
+# Primeiro display livre (:0, :1, ...), pelo socket do X (o lock pode sobrar de um X que caiu).
+DISPLAY_ID=
+n=0
+while [ "$n" -lt 10 ]; do
+    if [ ! -S "/tmp/.X11-unix/X$n" ]; then
+        DISPLAY_ID=":$n"
+        break
+    fi
+    n=$((n + 1))
+done
+if [ -z "$DISPLAY_ID" ]; then
+    echo "JWM: nenhum display livre entre :0 e :9 (há um X travado? veja /tmp/.X11-unix)." >&2
+    exit 1
 fi
 exec startx "$HERE/jwm-session" "$@" -- "$DISPLAY_ID" -nolisten tcp

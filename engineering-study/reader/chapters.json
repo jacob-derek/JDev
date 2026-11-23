@@ -1,0 +1,62 @@
+{
+  "title": "JDev Engineering Study",
+  "subtitle": "A source-grounded guide to the system, its components, and how they work together",
+  "sections": [
+    {
+      "title": "Orientation",
+      "chapters": [
+        {"id":"system-overview","title":"System overview","path":"SYSTEM_OVERVIEW.md","summary":"What the repository contains and how its major pieces fit."},
+        {"id":"architecture","title":"Architecture","path":"ARCHITECTURE.md","summary":"Execution path, system boundaries, state ownership, and communication."},
+        {"id":"component-map","title":"Component map","path":"COMPONENT_MAP.md","summary":"Programs, shared modules, tools, tests, and artifacts."}
+      ]
+    },
+    {
+      "title": "Runtime foundations",
+      "chapters": [
+        {"id":"jwm","title":"JWM and tiling","path":"COMPONENTS/JWM_AND_TILING.md","summary":"X11 window management, workspaces, tiling, and lifecycle."},
+        {"id":"desktop-runtime","title":"Desktop runtime stack","path":"INTEGRATION/DESKTOP_RUNTIME_STACK.md","summary":"JDesk, JTerm, JBar, process boundaries, and JIPC."},
+        {"id":"configuration-state","title":"Configuration and state","path":"INTEGRATION/CONFIGURATION_AND_STATE.md","summary":"Settings, XDG paths, caches, and runtime snapshots."},
+        {"id":"build-validation","title":"Dependencies and validation","path":"INTEGRATION/BUILD_AND_VALIDATION.md","summary":"Dependency boundaries, CI, tests, and manual validation paths."}
+      ]
+    },
+    {
+      "title": "Desktop applications",
+      "chapters": [
+        {"id":"jdesk","title":"JDesk","path":"COMPONENTS/JDESK.md","summary":"Pane composition, workspaces, lifecycle, and IPC ownership."},
+        {"id":"jterm","title":"JTerm","path":"COMPONENTS/JTERM.md","summary":"PTY processes, terminal emulation, input, and rendering."},
+        {"id":"jbar","title":"JBar","path":"COMPONENTS/JBAR.md","summary":"Status surface, metrics, controls, and optional cat animation."},
+        {"id":"jpopup","title":"jpopup","path":"COMPONENTS/JPOPUP.md","summary":"Calendar and volume popup interfaces."},
+        {"id":"jcode","title":"JCode","path":"COMPONENTS/JCODE.md","summary":"Editor state, input modes, analysis, file handling, and saves."},
+        {"id":"jfiles","title":"JFiles and jfcore","path":"COMPONENTS/JFILES_AND_JFCORE.md","summary":"File navigation, selection, operations, and shared filesystem logic."},
+        {"id":"jshell","title":"JShell and jbash","path":"COMPONENTS/JSHELL_AND_JBASH.md","summary":"Interactive shell, command dispatch, and persistent Bash."},
+        {"id":"shared-infrastructure","title":"Shared infrastructure","path":"INTEGRATION/SHARED_INFRASTRUCTURE.md","summary":"IPC, themes, status, logs, cursor protocol, and tiling geometry."},
+        {"id":"jrun","title":"JRun and jrcore","path":"COMPONENTS/JRUN.md","summary":"Application discovery, ranking, command mode, and launcher state."},
+        {"id":"janalyzer","title":"JAnalyzer","path":"COMPONENTS/JANALYZER.md","summary":"Repository indexing, search, Git comparison, and source viewing."},
+        {"id":"jtoast","title":"JToast","path":"COMPONENTS/JTOAST.md","summary":"Optional D-Bus notifications and session integration."},
+        {"id":"session-integration","title":"Session and desktop integration","path":"INTEGRATION/SESSION_AND_DESKTOP_INTEGRATION.md","summary":"Startup scripts, monitors, wallpaper, and file chooser portal."}
+      ]
+    },
+    {
+      "title": "Optional programs and tools",
+      "chapters": [
+        {"id":"jscreens","title":"JScreens","path":"COMPONENTS/JSCREENS.md","summary":"Saved monitor layouts and XRandR application."},
+        {"id":"media-tools","title":"JSlides and media tools","path":"COMPONENTS/JSLIDES_AND_MEDIA_TOOLS.md","summary":"Document viewing, music, CAVA configuration, media acquisition, and utilities."},
+        {"id":"jclass","title":"JClass","path":"COMPONENTS/JCLASS.md","summary":"Classroom and Drive interactions and the download path."},
+        {"id":"legacy-tools","title":"K-Move and legacy GTK JShell","path":"COMPONENTS/KMOVE_AND_LEGACY_JSHELL.md","summary":"Global pointer control and the separate GTK/Python shell prototype."},
+        {"id":"chessyou","title":"ChessYou!","path":"COMPONENTS/CHESSYOU.md","summary":"The separately packaged terminal chess study tool."}
+      ]
+    },
+    {
+      "title": "Workflows and reference",
+      "chapters": [
+        {"id":"workflows","title":"Integrated workflows","path":"INTEGRATION/WORKFLOWS.md","summary":"End-to-end paths and the guarantees at each handoff."},
+        {"id":"developer-guide","title":"Developer guide","path":"DEVELOPER_GUIDE.md","summary":"Source navigation, debugging, and extension seams."},
+        {"id":"mastery-guide","title":"Mastery guide","path":"MASTERY_GUIDE.md","summary":"Practical workflows and implemented capabilities."},
+        {"id":"technical-audit","title":"Technical audit","path":"TECHNICAL_AUDIT.md","summary":"Verified findings, confidence, and open runtime questions."},
+        {"id":"archive-provenance","title":"Archive provenance","path":"INTEGRATION/ARCHIVE_PROVENANCE.md","summary":"Git history, snapshots, and alternate-file context."},
+        {"id":"glossary","title":"Glossary","path":"GLOSSARY.md","summary":"JDev-specific engineering vocabulary."},
+        {"id":"progress","title":"Progress and scope","path":"PROGRESS.md","summary":"Completed study stages, limitations, and final status."}
+      ]
+    }
+  ]
+}

@@ -43,7 +43,7 @@ class TestDados(unittest.TestCase):
     def test_todos_os_temas_tem_as_mesmas_chaves(self):
         esperado = set(jtheme.THEMES["tokyonight"])
         for nome, t in jtheme.THEMES.items():
-            self.assertEqual(set(t), esperado, nome)
+            self.assertEqual(set(t) - {"float"}, esperado, nome)
 
     def test_todas_as_cores_sao_hex_validos(self):
         for nome, t in jtheme.THEMES.items():
@@ -58,7 +58,7 @@ class TestDados(unittest.TestCase):
 
     def test_apenas_o_dawn_e_claro(self):
         claros = [n for n, t in jtheme.THEMES.items() if t["light"]]
-        self.assertEqual(claros, ["dawn"])
+        self.assertEqual(claros, ["dawn", "doce"])
 
 
 class TestEscolha(unittest.TestCase):

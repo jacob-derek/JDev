@@ -2,7 +2,7 @@
 """
 jtheme - temas e medidas compartilhados pelo JDev (JWM, JBar, JTerm, JDesk, JCode, JRun).
 
-Temas:  tokyonight (padrão) · catppuccin (Mocha) · gruvbox (dark) · dawn (claro, quente, sem brilho)
+Temas:  tokyonight (padrão) · void (preto) · ashes · around_the_fur · hipopoto · gruvbox · carbon · dawn (claro)
 
 Escolha do tema, em ordem:
     1. variável de ambiente  JTHEME=gruvbox
@@ -39,6 +39,19 @@ THEMES: dict[str, dict] = {
         blue="#7aa2f7", cyan="#7dcfff", cyan2="#89ddff", purple="#bb9af7",
         border_idle="#292e42", header_idle="#6b7394", header_focus="#16161e",
         ansi_black="#15161e", ansi_brightblack="#7b83a8", ansi_white="#a9b1d6", ansi_brightwhite="#c0caf5",
+    ),
+    # Preto de verdade (o "terminal escuro" que deixa o texto colorido saltar): fundo quase #000, cores vivas.
+    "void": dict(
+        label="Void (preto)", light=False,
+        bg_deep="#000000", bg="#0a0a0a", bg_alt="#141414", bg_hover="#212121",
+        line="#1c1c1c", line2="#333333", select="#243049",
+        fg="#cccccc", fg_bright="#f2f2f2", fg_soft="#a8a8a8", dim="#767676", comment="#808080", ln="#4a4a4a",
+        secondary="#999999",
+        on_bright="#0a0a0a", on_accent="#0a0a0a", focus="#8f7bff", border="#3d3d3d",
+        red="#ff5f6d", green="#5fd38d", yellow="#f0c674", orange="#ff9e64",
+        blue="#6aa9ff", cyan="#56d4dd", cyan2="#8be9fd", purple="#c792ea",
+        border_idle="#1c1c1c", header_idle="#808080", header_focus="#0a0a0a",
+        ansi_black="#000000", ansi_brightblack="#808080", ansi_white="#cccccc", ansi_brightwhite="#f2f2f2",
     ),
     "ashes": dict(
         label="Ashes of the Wake", light=False,
@@ -119,6 +132,19 @@ THEMES: dict[str, dict] = {
         border_idle="#dfdad9", header_idle="#797593", header_focus="#faf4ed",
         ansi_black="#575279", ansi_brightblack="#9893a5", ansi_white="#797593", ansi_brightwhite="#464261",
     ),
+    # Rosa de algodão-doce, pêssego e menta: tons suaves no fundo, acentos escuros para manter leitura.
+    "doce": dict(
+        label="Doce (claro)", light=True,
+        bg_deep="#f0e3e2", bg="#fff8f5", bg_alt="#fffdf9", bg_hover="#f8ece8",
+        line="#ead8d7", line2="#d8c1c4", select="#f0dce7",
+        fg="#514352", fg_bright="#403343", fg_soft="#6e5a70", dim="#89758a", comment="#806d80", ln="#b9a6b7",
+        secondary="#715e73",
+        on_bright="#382c3d", on_accent="#fff8f5", focus="#a64f70", border="#cfb5c4",
+        red="#b34e61", green="#6e9d78", yellow="#946314", orange="#b45d43",
+        blue="#416e91", cyan="#397887", cyan2="#3c7985", purple="#805a8b",
+        border_idle="#ead8d7", header_idle="#715e73", header_focus="#fff8f5",
+        ansi_black="#514352", ansi_brightblack="#89758a", ansi_white="#715e73", ansi_brightwhite="#403343",
+    ),
 }
 
 ALIASES = {
@@ -127,7 +153,9 @@ ALIASES = {
     "around-the-fur": "around_the_fur", "atf": "around_the_fur",
     "hipopot(o)": "hipopoto", "hipo": "hipopoto",
     "light": "dawn", "claro": "dawn", "rosepine-dawn": "dawn",
+    "fofinho": "doce", "doce-claro": "doce",
 }
+ALIASES.update({"preto": "void", "black": "void", "void-black": "void"})
 PADRAO = "tokyonight"
 
 
@@ -136,9 +164,14 @@ def _arquivo() -> Path:
     return Path(base) / "jdev" / "theme"
 
 
+WALLPAPER = ("wallpaper", "wall", "auto")   # tema gerado a partir do wallpaper (jwall.py)
+
+
 def _resolver(nome: str | None) -> str | None:
     n = (nome or "").strip().lower()
     n = ALIASES.get(n, n)
+    if n in WALLPAPER:
+        return "wallpaper"
     return n if n in THEMES else None
 
 
@@ -153,7 +186,55 @@ def escolhido() -> str:
     return nome or PADRAO
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Fonte (a mesma em JTerm, JBar e JRun)
+# ══════════════════════════════════════════════════════════════════════════════
+# Ordem: JFONT=nome · ~/.config/jdev/font (uma linha) · primeira instalada desta lista.
+# As variantes "Nerd Font" trazem os ícones do JFiles/JShell; sem elas o JTerm cai no ASCII/emoji.
+FONTES = ["JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrainsMono NFM", "JetBrains Mono",
+          "Iosevka Nerd Font Mono", "Iosevka Term", "Iosevka", "CommitMono Nerd Font Mono", "Commit Mono",
+          "DejaVu Sans Mono", "Liberation Mono"]
+
+
+def fonte_pedida() -> str | None:
+    nome = (os.environ.get("JFONT") or "").strip()
+    if not nome:
+        try:
+            base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+            nome = (Path(base) / "jdev" / "font").read_text(encoding="utf-8").strip()
+        except OSError:
+            nome = ""
+    return nome or None
+
+
+def escolher_fonte(instaladas) -> str | None:
+    """Primeira fonte da preferência que existe em `instaladas` (nomes de família do Tk)."""
+    achadas = {f.lower(): f for f in instaladas}
+    pedida = fonte_pedida()
+    for nome in ([pedida] if pedida else []) + FONTES:
+        if nome.lower() in achadas:
+            return achadas[nome.lower()]
+    return None
+
+
+def _tema_wallpaper() -> dict | None:
+    """Tema derivado do wallpaper sobre uma base escura (JTHEME_BASE, padrão void); None se não der."""
+    try:
+        import jwall
+        base = THEMES.get((os.environ.get("JTHEME_BASE") or "void").strip().lower()) or THEMES["void"]
+        t = jwall.gerar(base)
+        return {**t, "label": "Wallpaper"} if t else None
+    except Exception:
+        return None
+
+
 NOME = escolhido()
+if NOME == "wallpaper":
+    _gerado = _tema_wallpaper()
+    if _gerado:
+        THEMES["wallpaper"] = _gerado
+    else:                      # sem imagem/Pillow: segue com o tema padrão em vez de quebrar
+        NOME = PADRAO
 T = THEMES[NOME]
 LIGHT = bool(T["light"])
 
@@ -177,7 +258,7 @@ ON_ACCENT = T["on_accent"]   # texto sobre a cor de foco
 # destaque
 FOCUS = T["focus"]           # borda da janela focada (JWM) e workspace ativo (JBar)
 BORDER = T["border"]         # borda das janelas sem foco
-FLOAT = T["yellow"]          # janela flutuante
+FLOAT = T.get("float", T["yellow"])          # janela flutuante
 MODE = T["green"]            # modo resize ligado
 BLUE, GREEN, YELLOW, RED = T["blue"], T["green"], T["yellow"], T["red"]
 CYAN, PURPLE = T["cyan"], T["purple"]
@@ -318,6 +399,14 @@ def estilo_jshell() -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 #  Linha de comando
 # ══════════════════════════════════════════════════════════════════════════════
+def misturar(a: str, b: str, t: float) -> str:
+    """Cor entre `a` e `b` (#rrggbb); t=0 -> a, t=1 -> b. Usada nas animações de borda do JWM."""
+    t = max(0.0, min(1.0, t))
+    ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(ca, cb, strict=True))
+
+
 def _bloco(hexcor: str) -> str:
     r, g, b = int(hexcor[1:3], 16), int(hexcor[3:5], 16), int(hexcor[5:7], 16)
     return f"\x1b[48;2;{r};{g};{b}m  \x1b[0m"
@@ -366,7 +455,7 @@ def validar(nome: str | None = None) -> list[tuple[str, str, str]]:
             continue
         for k in sorted(set(ref) - set(t)):
             saida.append(("ERRO", n, f"falta a chave '{k}'"))
-        for k in sorted(set(t) - set(ref)):
+        for k in sorted(set(t) - set(ref) - {"float"}):
             saida.append(("ERRO", n, f"chave desconhecida '{k}' (erro de digitacao?)"))
         invalido = False
         for k, v in t.items():

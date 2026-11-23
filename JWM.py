@@ -57,6 +57,20 @@ COLOR_FOCUS = _T.FOCUS
 COLOR_FLOAT = _T.FLOAT
 COLOR_MODE = _T.MODE     # borda da janela ativa enquanto o modo resize está ligado
 BORDER = 2
+# Fade da cor da borda ao ganhar/perder foco (JWM_ANIM=0 desliga; JWM_ANIM_MS muda a duração).
+ANIM = os.environ.get("JWM_ANIM", "1").strip().lower() not in {"0", "no", "false", "off"}
+try:
+    ANIM_S = max(0.04, min(0.6, int(os.environ.get("JWM_ANIM_MS", "140")) / 1000))
+except ValueError:
+    ANIM_S = 0.14
+
+
+def _misturar(a: str, b: str, t: float) -> str:
+    """Cor entre a e b (#rrggbb), t de 0 a 1 (o mesmo cálculo do jtheme.misturar)."""
+    t = max(0.0, min(1.0, t))
+    ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02x%02x%02x" % tuple(round(x + (y - x) * t) for x, y in zip(ca, cb, strict=True))
 
 GAP = _T.GAP         # espaço entre janelas em mosaico
 OUTER = _T.GAP       # espaço entre o mosaico e a borda do monitor
@@ -91,6 +105,7 @@ class Client:
     weight: float = 1.0
     monitor: int = 0
     geom: tuple[int, int, int, int] = (80, 80, 800, 600)
+    border_hex: str = ""      # cor da borda neste instante (o fade parte dela)
 
 
 @dataclass
@@ -104,7 +119,7 @@ class Workspace:
 class JWM:
     """Small reparenting-free ICCCM/EWMH window manager for X11."""
 
-    def __init__(self, jdesk: bool = True):
+    def __init__(self, jdesk: bool = True, solo_bar: bool = False):
         self.dpy = display.Display()
         self.dpy.set_error_handler(self._xerror)
         self.screen = self.dpy.screen()
@@ -127,6 +142,9 @@ class JWM:
         self.running = True
         self.drag: Optional[dict] = None
         self.desktop_proc: Optional[subprocess.Popen] = None
+        self.solo_bar = solo_bar                       # modo clean: sem JDesk, só a JBar como janela própria
+        self.bar_proc: Optional[subprocess.Popen] = None
+        self.bar_solo = False                          # a JBar solo está rodando (a faixa do rodapé é reservada)
         self.key_names: dict[int, str] = {}
         self.mode: Optional[str] = None   # None | "resize"
         self.bar_visible = True           # faixa da JBar reservada no rodapé?
@@ -148,6 +166,8 @@ class JWM:
         self.pix_float = self._color(COLOR_FLOAT)
         self.pix_mode = self._color(COLOR_MODE)
         self.pix_bg = self._color(COLOR_BG)
+        self._pix_cache: dict[str, int] = {}
+        self._anim: dict[int, list] = {}      # wid -> [inicio, cor_de, cor_para, cliente]
         self._claim_root()
         self._setup_ewmh()
         self._grab_keys()
@@ -157,6 +177,8 @@ class JWM:
         self._scan_existing_windows()
         if self.start_jdesk:
             self._start_desktop()
+        elif self.solo_bar:
+            self._start_solo_bar()
         log.info("JWM iniciado em %dx%d; log: %s", self.width, self.height, LOG_PATH)
 
     def _xerror(self, exc, request) -> None:
@@ -219,6 +241,31 @@ class JWM:
             log.info("JDesk iniciado (PID %s)", self.desktop_proc.pid)
         except OSError:
             log.exception("Não foi possível iniciar o JDesk")
+
+    def _start_solo_bar(self) -> None:
+        """Modo clean (--no-ui): só a JBar, como janela própria na faixa do rodapé do monitor primário."""
+        script = APP_DIR / "JBar.py"
+        if not script.is_file():
+            log.warning("JBar.py não encontrado em %s; seguindo sem barra.", APP_DIR)
+            return
+        try:
+            self.bar_proc = subprocess.Popen(
+                [sys.executable, str(script), "--solo", "--wm-pid", str(os.getpid())], cwd=str(APP_DIR),
+                stdin=subprocess.DEVNULL, stdout=open(LOG_PATH, "a"), stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            self.bar_solo = True
+            log.info("JBar (modo clean) iniciada (PID %s)", self.bar_proc.pid)
+        except OSError:
+            log.exception("Não foi possível iniciar a JBar")
+
+    def _check_solo_bar(self) -> None:
+        """Se a JBar solo morreu, devolve a faixa do rodapé às janelas (em vez de deixar um buraco)."""
+        if self.bar_proc is not None and self.bar_proc.poll() is not None:
+            log.warning("JBar encerrou (código %s); liberando a faixa do rodapé.", self.bar_proc.returncode)
+            self.bar_proc = None
+            self.bar_solo = False
+            self.arrange()
 
     def _refresh_size(self) -> None:
         try:
@@ -331,8 +378,9 @@ class JWM:
         return self.monitors[index]
 
     def _bar_bottom(self, monitor_index: int) -> int:
-        """Altura reservada no RODAPÉ pela barra do JDesk; só existe no monitor primário e some com Super+Shift+B."""
-        if self.bar_visible and self.desktop_id is not None and monitor_index == self.desk_monitor:
+        """Altura reservada no RODAPÉ pela JBar (a do JDesk ou a solo do modo clean); só existe no monitor
+        primário e some com Super+Shift+B."""
+        if self.bar_visible and (self.desktop_id is not None or self.bar_solo) and monitor_index == self.desk_monitor:
             return JDESK_BAR
         return 0
 
@@ -341,7 +389,13 @@ class JWM:
         c = self.clients.get(self.active) if self.active is not None else None
         ws = self.workspaces[self.current_ws]
         dados = {"pid": os.getpid(), "bar": self.bar_visible, "mode": self.mode, "split": ws.next_orient,
-                 "title": (c.title if c else "") or "", "ws": self.current_ws + 1}
+                 "title": (c.title if c else "") or "", "ws": self.current_ws + 1,
+                 # para a JBar solo: quantos workspaces, quais têm janelas (0-based) e onde fica a faixa dela
+                 "n_ws": len(self.workspaces),
+                 "ws_used": [i for i, w in enumerate(self.workspaces) if w.clients]}
+        if self.bar_solo:
+            mx, my, mw, mh = self._monitor_rect(self.desk_monitor)
+            dados["bar_rect"] = [mx, my + mh - JDESK_BAR, mw, JDESK_BAR]
         texto = json.dumps(dados, ensure_ascii=False)
         if texto == self._state_json:
             return
@@ -649,7 +703,7 @@ class JWM:
             w = min(bx2 - bx1, max(MIN_W, w))
             h = min(by2 - by1, max(MIN_H, h))
             x = max(bx1, min(x, bx2 - w))
-            toca_jdesk = self.desktop_id is not None and x < m0x + m0w and x + w > m0x
+            toca_jdesk = (self.desktop_id is not None or self.bar_solo) and x < m0x + m0w and x + w > m0x
             y = max(by1, min(y, by2 - h))
             bot0 = self._bar_bottom(self.desk_monitor)
             if toca_jdesk and bot0:                    # não deixa a flutuante cobrir a faixa da barra
@@ -697,20 +751,72 @@ class JWM:
         try:
             # _place: tira o border_pixel do configure e pinta depois
             c.window.configure(x=int(x), y=int(y), width=iw, height=ih, border_width=border)
-            c.window.change_attributes(border_pixel=self.pix_focus if c.wid == self.active else
-                                       (self.pix_float if c.floating else self.pix_border))
+            if c.wid not in self._anim:      # fade em curso: quem pinta é o _tick_anim
+                alvo = self._hex_borda(c, com_modo=False)
+                c.window.change_attributes(border_pixel=self._pix(alvo))
+                c.border_hex = alvo
             c.geom = (int(x), int(y), w, h)
         except error.BadWindow:
             pass
 
-    # _set_border
+    # ── cor e fade da borda ──
+    def _pix(self, hexcor: str) -> int:
+        """Pixel para #rrggbb (com cache). Em tela TrueColor alocar uma cor não gasta a paleta."""
+        p = self._pix_cache.get(hexcor)
+        if p is None:
+            try:
+                r, g, b = (int(hexcor[k:k + 2], 16) * 257 for k in (1, 3, 5))
+                p = self.screen.default_colormap.alloc_color(r, g, b).pixel
+            except Exception:
+                p = self._color(hexcor)
+            if len(self._pix_cache) < 512:
+                self._pix_cache[hexcor] = p
+        return p
+
+    def _hex_borda(self, c: Client, com_modo: bool = True) -> str:
+        if c.wid == self.active:
+            return COLOR_MODE if (com_modo and self.mode) else COLOR_FOCUS
+        return COLOR_FLOAT if c.floating else COLOR_BORDER
+
     def _set_border(self, c: Client) -> None:
         try:
-            pixel = self.pix_focus if c.wid == self.active else (self.pix_float if c.floating else self.pix_border)
-            if self.mode and c.wid == self.active:
-                pixel = self.pix_mode
-            c.window.change_attributes(border_pixel=pixel)
+            alvo = self._hex_borda(c)
+            atual = c.border_hex
+            if not ANIM or not atual or atual == alvo:
+                self._anim.pop(c.wid, None)
+                c.border_hex = alvo
+                c.window.change_attributes(border_pixel=self._pix(alvo))
+                return
+            em_curso = self._anim.get(c.wid)
+            if em_curso is None or em_curso[2] != alvo:     # recomeça do ponto onde a cor está agora
+                self._anim[c.wid] = [time.monotonic(), atual, alvo, c]
         except error.BadWindow:
+            self._anim.pop(c.wid, None)
+
+    def _tick_anim(self) -> None:
+        """Avança o fade de todas as bordas em transição (chamado pelo laço principal, ~60 vezes por s)."""
+        if not self._anim:
+            return
+        agora = time.monotonic()
+        for wid in list(self._anim):
+            inicio, de, para, c = self._anim[wid]
+            t = (agora - inicio) / ANIM_S
+            fim = t >= 1.0
+            cor = para if fim else _misturar(de, para, 1 - (1 - t) ** 3)    # ease-out: começa rápido, assenta suave
+            try:
+                c.window.change_attributes(border_pixel=self._pix(cor))
+                c.border_hex = cor
+            except error.BadWindow:
+                fim = True
+            except Exception:
+                log.exception("Erro no fade da borda (ignorado)")
+                fim = True
+                c.border_hex = ""
+            if fim:
+                self._anim.pop(wid, None)
+        try:
+            self.dpy.flush()
+        except Exception:
             pass
 
 
@@ -1194,6 +1300,8 @@ class JWM:
             if wid in self.clients:
                 self.focus(wid)
                 self.close_active()
+        elif typ == self.a["_NET_CURRENT_DESKTOP"] and data:
+            self.switch_workspace(int(data[0]))
         elif typ == self.a["_NET_WM_STATE"] and wid in self.clients:
             c = self.clients[wid]
             # action 0=remove, 1=add, 2=toggle; handle fullscreen atom in either slot
@@ -1299,15 +1407,18 @@ class JWM:
                 if not self.running:
                     break
                 self._write_state()
+                self._tick_anim()
                 now = time.monotonic()
                 if now >= next_poll:
                     try:
                         self._poll_outputs()
+                        self._check_solo_bar()
                     except Exception:
                         log.exception("Erro ao checar monitores (ignorado)")
                     next_poll = time.monotonic() + (0.3 if self._layout_proc else HOTPLUG_POLL)
                     continue
-                select.select([fd], [], [], max(0.01, next_poll - now))
+                espera = 0.016 if self._anim else max(0.01, next_poll - now)
+                select.select([fd], [], [], min(espera, max(0.01, next_poll - now)))
         except KeyboardInterrupt:
             pass
         finally:
@@ -1315,6 +1426,17 @@ class JWM:
 
     def shutdown(self) -> None:
         log.info("Encerrando JWM")
+        # Deixa uma cortina escura cobrir o desktop antes do X encerrar.
+        birds = None
+        if os.environ.get("JBIRDS", "1").strip() != "0":
+            try:
+                script = APP_DIR / "jbirds.py"
+                if script.is_file():
+                    birds = subprocess.Popen([sys.executable, str(script), "--saida"])
+                    birds.wait(timeout=1.5)
+            except (OSError, subprocess.SubprocessError):
+                if birds and birds.poll() is None:
+                    birds.kill()
         try:
             STATE_PATH.unlink(missing_ok=True)
         except OSError:
@@ -1339,6 +1461,12 @@ class JWM:
                     self.desktop_proc.wait(timeout=1.5)
                 except subprocess.TimeoutExpired:
                     self.desktop_proc.kill()
+            if self.bar_proc and self.bar_proc.poll() is None:
+                self.bar_proc.terminate()
+                try:
+                    self.bar_proc.wait(timeout=1.5)
+                except subprocess.TimeoutExpired:
+                    self.bar_proc.kill()
             try:
                 self.root.change_property(self.a["_NET_ACTIVE_WINDOW"], Xatom_window(), 32, [X.NONE])
                 self.root.delete_property(self.a["_NET_SUPPORTING_WM_CHECK"])
@@ -1368,12 +1496,14 @@ def Xatom_cardinal():
 def main() -> int:
     parser = argparse.ArgumentParser(description="JWM: window manager X11 do ecossistema J")
 
-    parser.add_argument("--no-jdesk", "--no-ui", dest="no_jdesk", action="store_true",
-                        help="não iniciar o JDesk (sem JBar): só o WM, sistema liso")
+    parser.add_argument("--no-jdesk", "--no-ui", dest="clean", action="store_true",
+                        help="modo clean: sem JDesk, só o WM e a JBar no rodapé (Super+Shift+B mostra/esconde)")
+    parser.add_argument("--bare", action="store_true",
+                        help="só o WM, sem JDesk e sem JBar (sistema liso)")
 
     args = parser.parse_args()
     try:
-        JWM(jdesk=not args.no_jdesk).run()
+        JWM(jdesk=not (args.clean or args.bare), solo_bar=args.clean and not args.bare).run()
     except SystemExit as exc:
         return int(exc.code or 0)
     except Exception:

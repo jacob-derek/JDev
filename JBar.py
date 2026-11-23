@@ -2,17 +2,25 @@
 """
 JBar - barra superior do JDesk (Fase 2).
 
-  [ 1 2 3 4 ]            [ qui 15 out  14:32 ]            [ VOL 65%  RAM 42%  CPU 12% ]
+  [ 1 2 3 4 ]            [ qui 15 out  14:32 ]     [ ♪ artista - faixa  VOL 65%  RAM 42%  CPU 12% ]
 
 - As métricas são coletadas numa thread (nada de subprocess ou I/O na thread da UI).
 - psutil é opcional: sem ele, CPU/RAM/rede aparecem como "--" (o volume e o relógio seguem).
+- Tocando agora: playerctl (opcional). Clique pausa/retoma; roda do mouse troca de faixa.
 - Volume: pactl/amixer (Linux), pycaw (Windows), osascript (macOS). Se nada estiver
   disponível, mostra "--" sem reclamar.
 
 Roda sozinho para teste:  python JBar.py
+
+Modo clean do JWM (jwm --no-ui):  python JBar.py --solo --wm-pid N
+  A barra vira uma janela própria (sem moldura, que o JWM nem gerencia) na faixa reservada do
+  rodapé do monitor primário. Posição, visibilidade (Super+Shift+B) e workspaces vêm do
+  ~/.cache/jwm-state.json; clicar num número pede o workspace ao JWM (EWMH _NET_CURRENT_DESKTOP).
 """
+import argparse
 import json
 import locale
+import math
 import os
 import re
 import shutil
@@ -40,6 +48,10 @@ try:
     from jtheme import BAR_FONT
 except ImportError:
     BAR_FONT = 12
+try:  # a gatinha é opcional; sem os sprites a JBar continua funcionando normalmente
+    import jcatsprite as jcat
+except ImportError:
+    jcat = None
 BAR_BG = DESK_BG   # o "vazio" entre as pílulas tem a cor do fundo do JDesk: parece transparente
 HOVER = PILL_HOVER
 
@@ -115,6 +127,31 @@ def toggle_mute():
         pass
 
 
+def ler_tocando():
+    """(texto, tocando) da faixa atual via playerctl; None se não há playerctl, player ou faixa."""
+    if not shutil.which("playerctl"):
+        return None
+    try:
+        out = _run(["playerctl", "metadata", "--format", "{{status}}\t{{artist}}\t{{title}}"])
+    except (OSError, subprocess.SubprocessError):
+        return None
+    status, _, resto = out.strip().partition("\t")
+    artista, _, titulo = resto.partition("\t")
+    if status not in ("Playing", "Paused") or not (artista or titulo):
+        return None
+    return (f"{artista} - {titulo}" if artista and titulo else (titulo or artista)), status == "Playing"
+
+
+def controlar_player(acao):
+    """acao: play-pause | next | previous."""
+    if shutil.which("playerctl"):
+        try:
+            subprocess.run(["playerctl", acao], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=1.0, check=False)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
 def brilho(delta):
     """Brilho da tela +5% / -5% (brightnessctl, como no sway antigo). Sem ele, não faz nada."""
     if shutil.which("brightnessctl"):
@@ -151,6 +188,26 @@ def mudar_layout(proximo: str | None = None) -> str:
 def em_thread(fn, *args):
     """Roda fn fora da thread da interface (pactl pode demorar e congelaria o Tk)."""
     threading.Thread(target=fn, args=args, daemon=True).start()
+
+
+def pedir_workspace(i):
+    """Pede ao JWM (mensagem EWMH _NET_CURRENT_DESKTOP) para ir ao workspace i (0-based)."""
+    def _enviar():
+        try:
+            from Xlib import X, display, protocol
+            d = display.Display()
+            try:
+                raiz = d.screen().root
+                ev = protocol.event.ClientMessage(
+                    window=raiz, client_type=d.intern_atom("_NET_CURRENT_DESKTOP"),
+                    data=(32, [int(i), X.CurrentTime, 0, 0, 0]))
+                raiz.send_event(ev, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+                d.flush()
+            finally:
+                d.close()
+        except Exception:   # sem python-xlib ou sem X: o clique simplesmente não faz nada
+            pass
+    em_thread(_enviar)
 
 
 def _osascript():
@@ -197,19 +254,164 @@ def make_volume_readers():
     return readers
 
 
+# ── Ícones dos programas abertos (pixel art desenhado no Canvas: não depende de fonte) ──
+LARANJA, AMARELO_FF = "#ff7a2f", "#ffc23d"
+_GLOBO = ["...cccc...", "..c.mm.c..", ".c..mm..c.", "cmmmmmmmmc", "c...mm...c",
+          "cmmmmmmmmc", ".c..mm..c.", "..c.mm.c..", "...cccc..."]
+_TERMINAL = ["tttttttttt", "tkkkkkkkkt", "tkgkkkkkkt", "tkkgkkkkkt", "tkgkkkkkkt",
+             "tkkkgggkkt", "tkkkkkkkkt", "tttttttttt"]
+_PAINEIS = ["aaaa.bbbb.", "aaaa.bbbb.", "aaaa.bbbb.", "..........", "cccc.dddd.", "cccc.dddd.", "cccc.dddd."]
+_PASTA = ["yyyy......", "yyyyyyyyy.", "yyyyyyyyyy", "yyyyyyyyyy", "yyyyyyyyyy", "yyyyyyyyyy", "yyyyyyyyyy"]
+_CODIGO = ["...b..b...", "..b....b..", ".b......b.", "b..cccc..b", ".b......b.", "..b....b..", "...b..b..."]
+_PLAY = ["gg........", "gggg......", "gggggg....", "gggggggg..", "gggggg....", "gggg......", "gg........"]
+ICONES = {
+    "firefox": (_GLOBO, {"c": LARANJA, "m": AMARELO_FF}),
+    "globo": (_GLOBO, {"c": BLUE, "m": CYAN}),
+    "terminal": (_TERMINAL, {"t": FG, "k": DARK, "g": GREEN}),
+    "jshell": (_PAINEIS, {"a": CYAN, "b": GREEN, "c": YELLOW, "d": BLUE}),
+    "pasta": (_PASTA, {"y": YELLOW}),
+    "codigo": (_CODIGO, {"b": BLUE, "c": CYAN}),
+    "play": (_PLAY, {"g": GREEN}),
+}
+ICONES_POR_CLASSE = [
+    ("firefox", ("firefox", "librewolf", "navigator")),
+    ("globo", ("chrom", "brave", "vivaldi", "epiphany", "qutebrowser")),
+    ("jshell", ("jshell",)),
+    ("codigo", ("jcode",)),
+    ("terminal", ("jterm", "jdesk", "xterm", "kitty", "alacritty", "foot", "urxvt", "terminal")),
+    ("pasta", ("thunar", "pcmanfm", "nautilus", "dolphin", "jfiles", "nemo")),
+    ("codigo", ("jcode", "code", "codium", "geany", "gedit", "kate")),
+    ("play", ("mpv", "vlc", "spotify", "audacious", "cmus")),
+]
+
+
+ESCONDER = ("jrun", "jtoast", "jbar", "jbirds")   # lançador e enfeites: não viram ícone
+
+
+def escondida(klass: str, titulo: str = "") -> bool:
+    k = f"{klass} {titulo}".lower()
+    return any(n in k for n in ESCONDER)
+
+
+def icone_de(klass: str, titulo: str = "") -> str:
+    """Nome do ícone pela WM_CLASS e pelo título (minúsculos); "generico" se não reconhece."""
+    k = f"{klass or ''} {titulo or ''}".lower()
+    for nome, chaves in ICONES_POR_CLASSE:
+        if any(c in k for c in chaves):
+            return nome
+    return "generico"
+
+
+def inicial_de(klass: str) -> str:
+    palavra = (klass or "").split()[-1] if (klass or "").split() else ""
+    return next((c.upper() for c in palavra if c.isalnum()), "?")
+
+
+def _ler_janelas(d, atoms):
+    """[(wid, wm_class, ativa, titulo)] das janelas do workspace atual (EWMH, só leitura)."""
+    raiz = d.screen().root
+
+    def prop(w, nome):
+        p = w.get_full_property(atoms[nome], 0)
+        return list(p.value) if p is not None else []
+
+    atual = (prop(raiz, "_NET_CURRENT_DESKTOP") or [0])[0]
+    ativa = (prop(raiz, "_NET_ACTIVE_WINDOW") or [0])[0]
+    saida = []
+    for wid in prop(raiz, "_NET_CLIENT_LIST"):
+        try:
+            w = d.create_resource_object("window", wid)
+            desk = (prop(w, "_NET_WM_DESKTOP") or [atual])[0]
+            if desk not in (atual, 0xFFFFFFFF):
+                continue
+            partes = w.get_wm_class() or ()
+            klass = " ".join(x.decode(errors="replace") if isinstance(x, bytes) else str(x) for x in partes)
+            try:
+                titulo = (w.get_wm_name() or "")
+                titulo = titulo.decode(errors="replace") if isinstance(titulo, bytes) else str(titulo)
+            except Exception:
+                titulo = ""
+            if escondida(klass, titulo):
+                continue
+            saida.append((int(wid), klass.lower(), int(wid) == int(ativa), titulo.lower()))
+        except Exception:      # a janela sumiu no meio da leitura
+            continue
+    return saida
+
+
+def ativar_janela(wid):
+    """Pede ao JWM (EWMH _NET_ACTIVE_WINDOW) para focar a janela."""
+    def _enviar():
+        try:
+            from Xlib import X, display, protocol
+            d = display.Display()
+            try:
+                raiz = d.screen().root
+                ev = protocol.event.ClientMessage(
+                    window=d.create_resource_object("window", wid),
+                    client_type=d.intern_atom("_NET_ACTIVE_WINDOW"), data=(32, [2, X.CurrentTime, 0, 0, 0]))
+                raiz.send_event(ev, event_mask=X.SubstructureRedirectMask | X.SubstructureNotifyMask)
+                d.flush()
+            finally:
+                d.close()
+        except Exception:
+            pass
+    em_thread(_enviar)
+
+
 # ── Coleta ───────────────────────────────────────────────────────────────────
 class Metrics:
     def __init__(self):
         self.lock = threading.Lock()
         self.stop_ev = threading.Event()
         self.data = {"cpu": None, "ram": None, "down": None, "up": None,
-                     "vol": None, "muted": False, "kbd": ""}
+                     "vol": None, "muted": False, "kbd": "", "play": None, "janelas": None}
 
     def start(self):
         threading.Thread(target=self._run_loop, daemon=True).start()
+        threading.Thread(target=self._loop_kbd, daemon=True).start()
+        threading.Thread(target=self._loop_janelas, daemon=True).start()
 
     def stop(self):
         self.stop_ev.set()
+
+    def set_kbd(self, valor):
+        """Atualiza o layout na hora (usado logo depois de trocar pelo clique)."""
+        with self.lock:
+            self.data["kbd"] = valor
+
+    def _loop_kbd(self):
+        """Layout do teclado em tempo real: consulta leve a cada 0,3 s, fora da thread da interface."""
+        if not shutil.which("setxkbmap"):
+            return
+        while not self.stop_ev.wait(0.3):
+            atual = layout_atual()
+            if atual:
+                self.set_kbd(atual)
+
+    def _loop_janelas(self):
+        """Janelas abertas (para os ícones): leitura leve a cada 0,5 s, numa conexão X própria."""
+        try:
+            from Xlib import display
+        except ImportError:
+            return
+        d = None
+        while not self.stop_ev.wait(0.5):
+            try:
+                if d is None:
+                    d = display.Display()
+                    atoms = {n: d.intern_atom(n) for n in ("_NET_CLIENT_LIST", "_NET_CURRENT_DESKTOP",
+                                                           "_NET_WM_DESKTOP", "_NET_ACTIVE_WINDOW")}
+                lista = _ler_janelas(d, atoms)
+                with self.lock:
+                    self.data["janelas"] = lista
+            except Exception:       # X caiu ou ainda não subiu: tenta de novo daqui a pouco
+                try:
+                    if d:
+                        d.close()
+                except Exception:
+                    pass
+                d = None
 
     def snapshot(self):
         with self.lock:
@@ -221,6 +423,7 @@ class Metrics:
         except ImportError:
             psutil = None
         readers = make_volume_readers()  # na própria thread (COM no Windows)
+        tem_player = bool(shutil.which("playerctl"))
         net_prev = None
         if psutil:
             psutil.cpu_percent(None)  # a primeira chamada só marca o ponto de partida
@@ -232,7 +435,6 @@ class Metrics:
 
         if self.stop_ev.wait(0.8):  # 1ª amostra logo depois do ponto de partida
             return
-        kbd_tick = 0
         while True:
             d = {}
             if psutil:
@@ -259,11 +461,7 @@ class Metrics:
                     if i:  # promove o leitor que funcionou
                         readers.insert(0, readers.pop(i))
                     break
-            # Layout de teclado: polling mais lento (a cada 5 ciclos ~5 s)
-            kbd_tick += 1
-            if kbd_tick >= 5:
-                d["kbd"] = layout_atual()
-                kbd_tick = 0
+            d["play"] = ler_tocando() if tem_player else None
             with self.lock:
                 self.data.update(d)
             if self.stop_ev.wait(INTERVAL):
@@ -301,6 +499,21 @@ def barra(pct):
     return BLOCOS[max(0, min(7, int(pct / 12.5)))]
 
 
+def equalizador(t, barras=3):
+    """Mini equalizador animado (só enfeite: não lê o áudio). `t` em segundos; cada barra balança em ritmo próprio."""
+    out = []
+    for i in range(barras):
+        v = 0.5 + 0.28 * math.sin(t * (5.1 + i * 1.7) + i * 2.1) + 0.22 * math.sin(t * (9.3 - i * 1.1) + i)
+        out.append(BLOCOS[max(0, min(7, int(v * 8)))])
+    return "".join(out) + " "
+
+
+def curto(texto, n):
+    """Texto numa linha só, com no máximo n caracteres (termina em … se cortou)."""
+    texto = " ".join(str(texto).split())
+    return texto if len(texto) <= n else texto[: max(1, n - 1)].rstrip() + "…"
+
+
 def pct_txt(v):
     return "--" if v is None else f"{v:.0f}%"
 
@@ -331,7 +544,8 @@ class StatusBar(tk.Canvas):
     TAB_W = round(BAR_FONT * 2.6)
     PAD = round(BAR_FONT * 0.9)
 
-    def __init__(self, parent, n_ws, on_select, on_visibilidade=None):
+    def __init__(self, parent, n_ws, on_select, on_visibilidade=None, on_estado=None, solo=False,
+                 pid_esperado=None):
         super().__init__(parent, bg=BAR_BG, height=self.HEIGHT, bd=0, highlightthickness=0)
         try:
             locale.setlocale(locale.LC_TIME, "")  # dia/mês no idioma do sistema
@@ -343,9 +557,13 @@ class StatusBar(tk.Canvas):
         self.n_ws = n_ws
         self.on_select = on_select
         self.on_visibilidade = on_visibilidade
+        self.on_estado = on_estado          # chamado com o estado do JWM a cada mudança (modo solo)
+        self.solo = solo                    # janela própria: workspaces e posição vêm do jwm-state.json
+        self.pid_esperado = pid_esperado    # só aceita o estado escrito por ESTE JWM (ignora arquivo velho)
         self.metrics = None
         self.job = None
         self.job_estado = None
+        self.job_gato = None
         self.current = 0
         self.created = set()
         self.modo = ""            # modo do próprio JDesk (resize de painéis)
@@ -356,7 +574,12 @@ class StatusBar(tk.Canvas):
         self._hover = None
         self._hits = []           # (x1, x2, nome, dado) da última renderização
         self._sig = None
-
+        self.gato = (jcat.Gato(skin=os.environ.get("JGATO_SKIN", "gatinha").strip().lower())
+                     if (jcat and os.environ.get("JGATO", "1").strip() != "0") else None)
+        self.escala_gato = max(2, round(BAR_FONT / 6))
+        self._livre = None        # (x1, x2): o maior espaço vazio da barra, onde a gata passeia
+        self._gato_box = None
+        self._gato_t = time.monotonic()
         self.bind("<Configure>", lambda e: self._render(force=True))
         self.bind("<Motion>", self._on_motion)
         self.bind("<Leave>", lambda e: self._set_hover(None))
@@ -386,9 +609,11 @@ class StatusBar(tk.Canvas):
         self.metrics = metrics
         self.refresh()
         self.poll_estado()
+        if self.gato:
+            self._tick_gato()
 
     def stop(self):
-        for attr in ("job", "job_estado"):
+        for attr in ("job", "job_estado", "job_gato"):
             job = getattr(self, attr)
             if job:
                 try:
@@ -412,16 +637,25 @@ class StatusBar(tk.Canvas):
                     try:
                         with open(path, encoding="utf-8") as f:
                             lido = json.load(f)
-                        if _pid_vivo(lido.get("pid")):   # arquivo velho de outra sessão é ignorado
-                            novo = lido
+                        if _pid_vivo(lido.get("pid")) and self.pid_esperado in (None, lido.get("pid")):
+                            novo = lido   # arquivo velho de outra sessão é ignorado
                     except (OSError, ValueError):
                         novo = {}
                 self.estado = novo
+                if self.solo and novo:
+                    try:
+                        self.n_ws = int(novo.get("n_ws", self.n_ws))
+                        self.current = int(novo.get("ws", self.current + 1)) - 1   # "ws" é 1-based
+                        self.created = {int(i) for i in novo.get("ws_used", ())}   # 0-based
+                    except (TypeError, ValueError):
+                        pass
                 visivel = bool(novo.get("bar", True))
                 if visivel != self._visivel:
                     self._visivel = visivel
                     if self.on_visibilidade:
                         self.on_visibilidade(visivel)
+                if self.on_estado:
+                    self.on_estado(novo)
                 self._render()
         except tk.TclError:
             return
@@ -478,7 +712,7 @@ class StatusBar(tk.Canvas):
         else:
             vseg = [("VOL ", DIM, False), (f"{vol}%", CYAN, False)]
         right = [("vol", vseg)]
-        kbd = d.get("kbd") or layout_atual()
+        kbd = d.get("kbd")
         if not compact and kbd:
             kbd_seg = [("KB ", DIM, False), (kbd.upper(), YELLOW if kbd != "br" else CYAN, True)]
             right.append(("kbd", kbd_seg))
@@ -486,11 +720,17 @@ class StatusBar(tk.Canvas):
             v = d.get(key)
             right.append((key, [(f"{nome} ", DIM, False),
                                 (f"{barra(v)} {pct_txt(v):>4}", level_color(v), False)]))
+        play = d.get("play")
+        if play and W >= 1400:   # só com espaço de sobra: o relógio nunca é espremido
+            texto_faixa, tocando = play
+            right.insert(0, ("play", [(equalizador(time.monotonic()) if tocando else "‖ ", GREEN if tocando else DIM, False),
+                                      (curto(texto_faixa, 26), FG, False)]))
         clock = ([] if compact else [(data + "  ", DIM, False)]) + [(hora, FG, True)]
         modo_wm = est.get("mode")
         split = est.get("split")
-        titulo = "" if compact else (est.get("title") or "")
-        sig = (W, self.current, tuple(sorted(self.created)), self.modo, modo_wm, split, titulo, self._hover, d.get("kbd"),
+        janelas = d.get("janelas")                 # None = sem python-xlib: volta ao título da janela ativa
+        titulo = "" if (compact or janelas is not None) else (est.get("title") or "")
+        sig = (W, self.n_ws, self.current, tuple(sorted(self.created)), self.modo, modo_wm, split, titulo, self._hover, d.get("kbd"), tuple(janelas) if janelas else (),
                tuple(tuple(s) for _k, s in right), tuple(clock))
         if not force and sig == self._sig:
             return
@@ -535,7 +775,7 @@ class StatusBar(tk.Canvas):
             w = self._medir(segs) + 2 * self.PAD
             x -= w
             self._hits.append((x, x + w, key, None))
-            self._capsula(x, x + w, y1, y2, PILL_HOVER if (key == "vol" and self._hover == ("vol", None)) else PILL_BG)
+            self._capsula(x, x + w, y1, y2, PILL_HOVER if (key in ("vol", "play") and self._hover == (key, None)) else PILL_BG)
             self._texto(x + self.PAD, cy, segs)
             x -= GAP
         direita_ini = x + GAP
@@ -557,7 +797,52 @@ class StatusBar(tk.Canvas):
             disp = relogio_ini - GAP - esquerda_fim - 2 * self.PAD
             txt = self._elidir(titulo, disp)
             if txt and disp > 40:
-                self._pilula(esquerda_fim, y1, y2, [(txt, FG, False)])
+                esquerda_fim += self._pilula(esquerda_fim, y1, y2, [(txt, FG, False)]) + GAP
+
+        # ── ícones dos programas abertos (no lugar do nome da janela) ──
+        if janelas:
+            cabem = max(0, int((relogio_ini - GAP - esquerda_fim - 8) // self.ICON_W))
+            if cabem:
+                shown = janelas[:cabem]
+                pw = len(shown) * self.ICON_W + 8
+                self._capsula(esquerda_fim, esquerda_fim + pw, y1, y2, PILL_BG)
+                for i, (wid, klass, ativa, titulo) in enumerate(shown):
+                    ix = esquerda_fim + 4 + i * self.ICON_W
+                    if ativa or self._hover == ("app", wid):
+                        self._capsula(ix + 1, ix + self.ICON_W - 1, y1 + 3, y2 - 3, PILL_HOVER)
+                    self._icone(ix + self.ICON_W / 2, cy - 1, klass, titulo)
+                    if ativa:
+                        self.create_rectangle(ix + 7, y2 - 6, ix + self.ICON_W - 7, y2 - 4, fill=FOCUS, outline="")
+                    self._hits.append((ix, ix + self.ICON_W, "app", wid))
+                esquerda_fim += pw + GAP
+
+        # ── espaço vazio (para a gata): antes e depois do relógio; fica com o maior ──
+        vazios = [(esquerda_fim + GAP, relogio_ini - GAP)]
+        if relogio_ini != direita_ini:
+            vazios.append((relogio_ini + cw + GAP, direita_ini - GAP))
+        melhor = max(vazios, key=lambda v: v[1] - v[0])
+        self._livre = melhor if melhor[1] - melhor[0] > 0 else None
+        self._desenhar_gato()
+
+    ICON_W = 30
+    ICON_ESC = 2
+
+    def _icone(self, cx, cy, klass, titulo=""):
+        nome = icone_de(klass, titulo)
+        e = self.ICON_ESC
+        if nome == "generico":
+            r = 9
+            self._capsula(cx - r, cx + r, cy - r, cy + r, LINE)
+            self.create_text(cx, cy, text=inicial_de(klass), fill=FG, font=self.font_bold)
+            return
+        linhas, cores = ICONES[nome]
+        x0, y0 = cx - len(linhas[0]) * e / 2, cy - len(linhas) * e / 2
+        for j, linha in enumerate(linhas):
+            for i, ch in enumerate(linha):
+                cor = cores.get(ch)
+                if cor:
+                    self.create_rectangle(x0 + i * e, y0 + j * e, x0 + (i + 1) * e, y0 + (j + 1) * e,
+                                          fill=cor, outline="")
 
     # ── mouse ──
     def _hit_em(self, x):
@@ -574,9 +859,14 @@ class StatusBar(tk.Canvas):
 
     def _on_motion(self, e):
         h = self._hit_em(e.x)
-        self._set_hover(h if h and h[0] in ("tab", "vol", "kbd") else None)
+        self._set_hover(h if h and h[0] in ("tab", "vol", "kbd", "play", "app") else None)
 
     def _on_click(self, e):
+        box = self._gato_box
+        if self.gato and box and box[0] <= e.x <= box[2] and box[1] - 8 <= e.y <= box[3]:
+            self.gato.carinho()                          # clicou na gata: coração
+            self._desenhar_gato()
+            return
         h = self._hit_em(e.x)
         if not h:
             return
@@ -585,14 +875,58 @@ class StatusBar(tk.Canvas):
         elif h[0] == "vol":
             em_thread(toggle_mute)
         elif h[0] == "kbd":
-            em_thread(lambda: mudar_layout())
+            def _trocar():
+                novo = mudar_layout()
+                if self.metrics:
+                    self.metrics.set_kbd(novo)
+            em_thread(_trocar)
+        elif h[0] == "play":
+            em_thread(controlar_player, "play-pause")
+        elif h[0] == "app":
+            ativar_janela(h[1])
+
+    COR_GATO = {"B": FG, "D": DIM, "E": DARK, "N": RED, "Z": CYAN, "H": RED}
+
+    def _desenhar_gato(self):
+        self.delete("gato")
+        self._gato_box = None
+        g = self.gato
+        if not g or not g.visivel or not self._livre:
+            return
+        e = self.escala_gato
+        base = (self.HEIGHT + PILL_H) // 2 - 3          # "chão": perto do fundo das pílulas
+        topo = base - jcat.ALT * e
+        x0 = int(g.x)
+        cores = jcat.CORES_GATINHA if g.skin == "gatinha" else self.COR_GATO
+        for col, lin, ch in g.pixels():
+            cor = cores.get(ch)
+            if cor:
+                px, py = x0 + col * e, topo + lin * e
+                self.create_rectangle(px, py, px + e, py + e, fill=cor, outline="", tags="gato")
+        self._gato_box = (x0, topo, x0 + jcat.LARG * e, base)
+
+    def _tick_gato(self):
+        try:
+            agora = time.monotonic()
+            dt, self._gato_t = agora - self._gato_t, agora
+            if self._livre and self._visivel:
+                tocando = bool((self.dados.get("play") or (None, False))[1])
+                self.gato.passo(dt, self._livre[0], self._livre[1], self.escala_gato, tocando)
+                self._desenhar_gato()
+            else:
+                self.delete("gato")
+        except tk.TclError:
+            return
+        except Exception:          # enfeite: nunca derruba a barra
+            pass
+        self.job_gato = self.after(120, self._tick_gato)
 
     def _on_scroll(self, e, direcao):
         h = self._hit_em(e.x)
         if h and h[0] == "vol":
             em_thread(adjust_volume, direcao)
-        elif h and h[0] == "kbd":
-            pass  # scroll nao muda teclado
+        elif h and h[0] == "play":
+            em_thread(controlar_player, "next" if direcao > 0 else "previous")
 
     # ── atualização (só lê o snapshot; nada bloqueante aqui) ──
     def refresh(self):
@@ -601,10 +935,75 @@ class StatusBar(tk.Canvas):
             self._render()
         except tk.TclError:
             return
-        self.job = self.after(1000, self.refresh)
+        self.job = self.after(250, self.refresh)
 
 
-if __name__ == "__main__":  # teste isolado da barra
+SOLO_CHECK_MS = 2000   # de quanto em quanto tempo confere se o JWM ainda existe
+
+
+def main_solo(wm_pid=None):
+    """JBar como janela própria (modo clean do JWM): sem moldura, na faixa do rodapé do monitor primário.
+
+    override_redirect: o JWM não gerencia a janela (sem foco, sem mosaico, sem borda). Quem decide
+    onde ela fica e se aparece é o JWM, pelo jwm-state.json (bar_rect e bar, este último com Super+Shift+B).
+    """
+    root = tk.Tk()
+    root.title("JBar")
+    root.configure(bg=BAR_BG)
+    root.overrideredirect(True)
+    try:
+        root.wm_attributes("-type", "dock")   # o picom não arredonda os cantos nem põe sombra em "dock"
+    except tk.TclError:
+        pass
+    root.withdraw()
+    metrics = Metrics()
+    metrics.start()
+    ctl = {"rect": None, "visivel": False}
+
+    def aplicar(est):
+        rect = est.get("bar_rect")
+        try:
+            x, y, w, h = (int(v) for v in rect)
+        except (TypeError, ValueError):
+            rect = None
+        if not est.get("bar", True) or rect is None:
+            if ctl["visivel"]:
+                root.withdraw()
+                ctl["visivel"] = False
+            return
+        if [x, y, w, h] != ctl["rect"]:
+            root.geometry(f"{w}x{h}+{x}+{y}")
+            ctl["rect"] = [x, y, w, h]
+        if not ctl["visivel"]:
+            root.deiconify()
+            root.lift()
+            ctl["visivel"] = True
+
+    barra = StatusBar(root, 4, pedir_workspace, on_estado=aplicar, solo=True, pid_esperado=wm_pid)
+    barra.pack(fill=tk.BOTH, expand=True)
+    barra.start(metrics)
+
+    def sair():
+        barra.stop()
+        metrics.stop()
+        root.destroy()
+
+    def vigiar():
+        if wm_pid is not None and not _pid_vivo(wm_pid):   # o JWM acabou: a barra não fica órfã
+            sair()
+            return
+        root.after(SOLO_CHECK_MS, vigiar)
+
+    root.after(SOLO_CHECK_MS, vigiar)
+    root.mainloop()
+
+
+if __name__ == "__main__" and "--solo" in sys.argv:
+    _ap = argparse.ArgumentParser()
+    _ap.add_argument("--solo", action="store_true")
+    _ap.add_argument("--wm-pid", type=int, default=None)
+    main_solo(_ap.parse_args().wm_pid)
+elif __name__ == "__main__":  # teste isolado da barra
     root = tk.Tk()
     root.title("JBar")
     root.geometry("900x60")
