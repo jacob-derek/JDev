@@ -16,6 +16,8 @@ This is the reconciled repository inventory for the completed static study. “C
 | JRun | `JRun.py` | Tk application/command launcher; search, app discovery and arithmetic delegated to `jrcore.py`. |
 | JToast | `JToast.py` | D-Bus notification service and Tk notification UI; started conditionally by `jwm-session`. |
 | JAnalyzer | `JAnalyzer.py` | Terminal Git/source/repository inspection tool; uses prompt_toolkit and Pygments. |
+| JCat and ambient animation | `jcatsprite.py`, `jdoodles.py`, `jbirds.py` | Cat sprites and JBar model, optional session doodles, and startup reveal; details in [JCat and ambient desktop animation](COMPONENTS/JCAT_AND_AMBIENT_DESKTOP.md). |
+| JRelogio | `tools/jrelogio.py` | Standalone pixel-art jungle clock/hourglass and countdown timer; pure rendering logic plus a Tk window, with focused tests under `tools/tests/`. |
 
 ## Shared root modules and small utilities
 
@@ -32,7 +34,10 @@ This is the reconciled repository inventory for the completed static study. “C
 | `jwall.py` | Optional wallpaper-derived chrome theme and cache; invoked by `jtheme` for wallpaper mode. See [shared infrastructure](INTEGRATION/SHARED_INFRASTRUCTURE.md#jtheme-and-jwall-role-based-theme-state). |
 | `jpopup.py` | JBar calendar and volume popup widgets (current source includes uncommitted additions). |
 | `jbash.py` | Persistent Bash process bridge used by root JShell; see [JShell/jbash](COMPONENTS/JSHELL_AND_JBASH.md). |
-| `jcat.py` | Small pure animation/state model consumed optionally by JBar for its clickable cat decoration. It is not a separate user-facing program, so its behavior is covered in [JBar](COMPONENTS/JBAR.md) rather than a standalone chapter. |
+| `jcatsprite.py` | Pixel-art skins and pure `Gato` animation/state model; JBar embeds it for the cat decoration. |
+| `jcat.py` | X11 shaped-window pet runner, surface-walking model, and cache-file event helper. Its current `main()` is a no-op; active JBar cat uses `jcatsprite.py` directly. |
+| `jdoodles.py` | Optional session process for butterflies, night fireflies, and a daily ghost; reuses `jcat.Tela` for shaped X11 windows. |
+| `jbirds.py` | Optional startup overlay with pixel-art birds and a curtain reveal coordinated with JDesk through a cache readiness marker. |
 | `jcursor.py` | Cursor preference and DECSCUSR protocol helper shared by JCode and JTerm; see [shared infrastructure](INTEGRATION/SHARED_INFRASTRUCTURE.md#jcursor-jcode-to-terminal-cursor-protocol). |
 | `jterm_diag.py` | JTerm diagnostic utility, listed with the terminal troubleshooting path in [JTerm](COMPONENTS/JTERM.md). |
 
@@ -55,6 +60,7 @@ This is the reconciled repository inventory for the completed static study. “C
 | `tools/JClass/` | Google Classroom/Drive terminal app plus API/download/auth helpers; optional Google API dependencies; JIPC integration. |
 | `tools/JSlides.py` | Tk slide/document viewer; LibreOffice conversion and optional PyMuPDF/python-pptx; JDesk recognizes it. |
 | `tools/JCava.py` | Generates Cava configuration colored from JDev theme. |
+| `tools/jrelogio.py` | Standalone jungle clock and countdown timer; pure pixel-art renderer with Tk window and tests in `tools/tests/`. |
 | `tools/JGrab.py` | Album/track matching and download workflow; external network services and tools such as yt-dlp/ffmpeg. |
 | `tools/JPlayer.py` | Terminal music player; subprocess/audio backend and metadata/cover reading. |
 | `tools/JWrite.py` | Curses terminal game. |

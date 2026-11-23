@@ -11,7 +11,7 @@ This directory contains the staged, source-grounded engineering study of the JDe
 5. [Desktop runtime stack](INTEGRATION/DESKTOP_RUNTIME_STACK.md) — JDesk/JTerm/JBar/JIPC and their process boundaries.
 6. [Configuration and state](INTEGRATION/CONFIGURATION_AND_STATE.md) — precedence, persistent files, runtime snapshots, and XDG behavior.
 7. [Dependencies and validation](INTEGRATION/BUILD_AND_VALIDATION.md) — install boundaries, CI, tests, and manual Xephyr path.
-8. [JDesk](COMPONENTS/JDESK.md), [JTerm](COMPONENTS/JTERM.md), [JBar](COMPONENTS/JBAR.md), and [jpopup](COMPONENTS/JPOPUP.md) — interactive desktop components.
+8. [JDesk](COMPONENTS/JDESK.md), [JTerm](COMPONENTS/JTERM.md), [JBar](COMPONENTS/JBAR.md), [jpopup](COMPONENTS/JPOPUP.md), and [JCat and ambient desktop animation](COMPONENTS/JCAT_AND_AMBIENT_DESKTOP.md) — interactive desktop components, visual details, and the standalone JRelogio.
 9. [JCode](COMPONENTS/JCODE.md), [JFiles and jfcore](COMPONENTS/JFILES_AND_JFCORE.md), and [JShell/jbash](COMPONENTS/JSHELL_AND_JBASH.md) — terminal applications and their integration paths.
 10. [Shared infrastructure](INTEGRATION/SHARED_INFRASTRUCTURE.md) — IPC, theme, status, logging, cursor, and geometry contracts.
 11. [JRun](COMPONENTS/JRUN.md), [JAnalyzer](COMPONENTS/JANALYZER.md), and [JToast](COMPONENTS/JTOAST.md) — launcher, repository inspector, and notification daemon.
@@ -34,6 +34,8 @@ This directory contains the staged, source-grounded engineering study of the JDe
 - [JDesk](COMPONENTS/JDESK.md)
 - [JTerm](COMPONENTS/JTERM.md)
 - [JBar](COMPONENTS/JBAR.md)
+- [JCat and ambient desktop animation](COMPONENTS/JCAT_AND_AMBIENT_DESKTOP.md)
+- JRelogio is documented in [JCat and ambient desktop animation](COMPONENTS/JCAT_AND_AMBIENT_DESKTOP.md#jrelogio-jungle-clock-and-timer)
 - [jpopup](COMPONENTS/JPOPUP.md)
 - [JCode](COMPONENTS/JCODE.md)
 - [JFiles and jfcore](COMPONENTS/JFILES_AND_JFCORE.md)

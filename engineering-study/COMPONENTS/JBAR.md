@@ -16,11 +16,11 @@ flowchart LR
   Bar -->|solo workspace click: EWMH ClientMessage| JWM
   Metrics[Metrics worker] -->|locked snapshot| Bar
   Bar --> Popups[jpopup calendar / volume]
-  Bar -->|optional animation| Cat[jcat]
+  Bar -->|embedded sprite model| Cat[jcatsprite.Gato]
   Metrics -->|optional APIs and commands| OS[psutil / pactl / amixer / playerctl / setxkbmap]
 ```
 
-Facts: JBar imports `CalendarioPopup` and `VolumePopup` unconditionally from lowercase `jpopup`, while `jtheme` and `jcat` are optional imports with local fallback behavior ([JBar.py:33-56](../../JBar.py#L33)). It reads `jwm-state.json` using `XDG_CACHE_HOME` or `~/.cache` ([JBar.py:393-395](../../JBar.py#L393)). Inference: the popup import is a hard startup dependency even though the theme and cat decoration are optional.
+Facts: JBar imports `CalendarioPopup` and `VolumePopup` unconditionally from lowercase `jpopup`, while `jtheme` and `jcatsprite` are optional imports with local fallback behavior ([JBar.py:33-56](../../JBar.py#L33)). It reads `jwm-state.json` using `XDG_CACHE_HOME` or `~/.cache` ([JBar.py:393-395](../../JBar.py#L393)). Inference: the popup import is a hard startup dependency even though the theme and cat decoration are optional. The cat’s skin, animation, active owner, and legacy X11 runner are described in [JCat and ambient desktop animation](JCAT_AND_AMBIENT_DESKTOP.md).
 
 ## Execution and lifecycle
 

@@ -15,12 +15,17 @@ flowchart TD
   Layout --> Wallpaper[jwm-wallpaper]
   Session --> Picom[optional picom]
   Session --> Toast[optional JToast]
+  Session -. optional .-> Doodles[jdoodles.py]
+  Session -. optional .-> Birds[jbirds.py startup overlay]
   Session --> WM[exec JWM.py]
+  Birds -. waits for cache marker .-> Desk[JDesk ready]
 ```
 
 `start-jwm` resolves its path through symlinks, verifies `startx` and Python Xlib, chooses the first unused X socket from `:0` through `:9`, and replaces itself with `startx ... jwm-session ... -nolisten tcp` ([start-jwm:1-38](../../start-jwm#L1)). Its usage comment says `--no-ui` means no JDesk and no JBar, but actual JWM argument behavior differs: current `JWM.py` has a clean mode that launches standalone JBar without JDesk; `--bare` omits both. The CLI/help mismatch was captured in the JWM chapter and should be understood before relying on the wrapper comment.
 
 `jwm-session` creates a D-Bus session with `dbus-run-session` only when no bus address exists, then logs startup to `$XDG_CACHE_HOME/jwm-session.log` or `~/.cache/jwm-session.log`. It sets cursor defaults, attempts `jwm-layout`, optionally starts picom if installed and configured (trying xrender if the configured launch dies quickly), starts JToast only with a session bus and importable jeepney, then `exec`s JWM ([jwm-session:1-51](../../jwm-session#L1)). The `exec` preserves signal/process ownership for the WM as the foreground session process.
+
+`jwm-session` also starts J Doodles when `JDOODLES` is not `0`, the script exists, and python-xlib imports; it starts JBirds when `JBIRDS` is not `0` and the script exists. These are optional decorations, not prerequisites for JWM. In the normal path, JDesk writes `$XDG_CACHE_HOME/jdev/pronto` (or `~/.cache/jdev/pronto`) after its first idle callback; JBirds waits for that marker before revealing the desktop. The `--no-ui` path passes `--sem-ui` and uses the overlay’s maximum wait instead. See [JCat and ambient desktop animation](../COMPONENTS/JCAT_AND_AMBIENT_DESKTOP.md) for the effects and configuration switches.
 
 ## Monitor arrangement and hotplug
 

@@ -11,6 +11,7 @@ This is not one application or one Python package. It is a coordinated collectio
 - standalone Tk and terminal applications;
 - shared modules for IPC, themes, file operations, status rendering, logs, icons, and launch/search logic;
 - shell integration for monitors, wallpaper, session startup, testing, and file chooser portal integration;
+- ambient visual details: the JBar kitten, session doodles, startup bird/reveal overlay, and standalone jungle clock/timer;
 - optional tools, a separate `chessyou` Python package, tests, assets, and data/archive files.
 
 ## Preliminary scale
